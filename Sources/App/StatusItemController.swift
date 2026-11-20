@@ -7,22 +7,39 @@
 
 import AppKit
 
-/// The menu bar item: artwork and title of what's playing, with a menu for
-/// playback controls. A stand-in until the designed capsule and popover land.
+/// The menu bar item: the artwork capsule while something is playing, a
+/// plain note symbol otherwise, and a menu for playback controls until the
+/// player popover lands.
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let monitor: NowPlayingMonitor?
     private let menu = NSMenu()
+    private let capsule = CapsuleView(frame: NSRect(x: 0, y: 0, width: 0, height: CapsuleView.Metrics.height))
+
+    /// Space between the capsule and the edges of the status item.
+    private let inset: CGFloat = 2
+
+    // Artwork is decoded once per image; the monitor hands out a new NSImage
+    // only when the bytes change, so identity is a cheap change check.
+    private var preparedSource: NSImage?
+    private var prepared: Artwork?
 
     /// Widest the title may get, in points, before it is truncated.
-    var maxTitleWidth: CGFloat = 180 { didSet { render(monitor?.current) } }
+    var maxTitleWidth: CGFloat {
+        get { capsule.maxTitleWidth }
+        set { capsule.maxTitleWidth = newValue }
+    }
 
     init(monitor: NowPlayingMonitor?) {
         self.monitor = monitor
         super.init()
         menu.delegate = self
         statusItem.menu = menu
-        statusItem.button?.imagePosition = .imageLeft
+
+        capsule.isHidden = true
+        capsule.onResize = { [weak self] _ in self?.fitCapsule() }
+        capsule.onControl = { [weak self] key in self?.press(key) }
+        statusItem.button?.addSubview(capsule)
         render(nil)
 
         monitor?.onChange = { [weak self] reading in self?.render(reading) }
@@ -35,52 +52,55 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func render(_ reading: NowPlaying?) {
         guard let button = statusItem.button else { return }
-        guard let reading else {
-            button.image = Self.symbol("music.note")
-            button.title = ""
-            button.toolTip = nil
+        guard let reading, let artwork = artwork(for: reading) else {
+            capsule.isHidden = true
+            statusItem.length = NSStatusItem.variableLength
+            button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Tuno")
+            button.image?.isTemplate = true
+            button.setAccessibilityLabel("Tuno, nothing playing")
             return
         }
 
-        button.image = reading.artwork.map(Self.menuBarArtwork) ?? Self.symbol(reading.isPlaying ? "play.fill" : "pause.fill")
-        let font = NSFont.menuBarFont(ofSize: 0)
-        button.attributedTitle = NSAttributedString(
-            string: " " + Self.truncate(reading.title, toWidth: maxTitleWidth, font: font),
-            attributes: [.font: font, .foregroundColor: reading.isPlaying ? NSColor.labelColor : NSColor.secondaryLabelColor]
-        )
-        button.toolTip = [reading.title, reading.artist, reading.album].compactMap { $0 }.joined(separator: "\n")
+        button.image = nil
+        button.title = ""
+        capsule.show(.init(title: reading.title, isPlaying: reading.isPlaying,
+                           artwork: artwork.image, pausedArtwork: artwork.paused, tint: artwork.tint))
+        capsule.isHidden = false
+        button.setAccessibilityLabel([reading.title, reading.artist].compactMap { $0 }.joined(separator: ", "))
+        fitCapsule()
     }
 
-    private static func symbol(_ name: String) -> NSImage? {
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "Tuno")
-        image?.isTemplate = true
-        return image
+    private func fitCapsule() {
+        guard !capsule.isHidden, let button = statusItem.button else { return }
+        statusItem.length = capsule.preferredWidth + inset * 2
+        let y = floor((button.bounds.height - CapsuleView.Metrics.height) / 2)
+        capsule.setFrameOrigin(NSPoint(x: inset, y: y))
     }
 
-    /// 16 pt artwork with rounded corners, as in the menu bar design.
-    private static func menuBarArtwork(_ source: NSImage) -> NSImage {
-        let size = NSSize(width: 16, height: 16)
-        return NSImage(size: size, flipped: false) { rect in
-            NSBezierPath(roundedRect: rect, xRadius: 4, yRadius: 4).addClip()
-            source.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
-            return true
+    /// Track artwork, or the player app's icon when the track has none.
+    private func artwork(for reading: NowPlaying) -> Artwork? {
+        let source = reading.artwork ?? appIcon(for: reading.bundleIdentifier)
+        guard let source else { return nil }
+        if source !== preparedSource {
+            preparedSource = source
+            prepared = Artwork(source)
         }
+        return prepared
     }
 
-    private static func truncate(_ text: String, toWidth width: CGFloat, font: NSFont) -> String {
-        let attributes: [NSAttributedString.Key: Any] = [.font: font]
-        guard (text as NSString).size(withAttributes: attributes).width > width else { return text }
-        var low = 0, high = text.count
-        while low < high {
-            let mid = (low + high + 1) / 2
-            let candidate = String(text.prefix(mid)).trimmingCharacters(in: .whitespaces) + "…"
-            if (candidate as NSString).size(withAttributes: attributes).width <= width {
-                low = mid
-            } else {
-                high = mid - 1
-            }
+    private var iconCache: [String: NSImage] = [:]
+
+    private func appIcon(for bundleIdentifier: String?) -> NSImage? {
+        let key = bundleIdentifier ?? ""
+        if let cached = iconCache[key] { return cached }
+        let icon: NSImage?
+        if let bundleIdentifier, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            icon = NSWorkspace.shared.icon(forFile: url.path)
+        } else {
+            icon = NSImage(systemSymbolName: "music.note", accessibilityDescription: nil)
         }
-        return String(text.prefix(low)).trimmingCharacters(in: .whitespaces) + "…"
+        iconCache[key] = icon
+        return icon
     }
 
     // MARK: - Menu
