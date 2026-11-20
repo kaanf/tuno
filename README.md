@@ -1,5 +1,3 @@
-# tuno
-
 <p align="center"><img src="docs/hero.png" alt="tuno playing a song in the notch" width="100%"></p>
 
 a little now playing player for macs with a notch.
