@@ -40,66 +40,13 @@ struct SettingsView: View {
     /// Re-checks permission while the window is open, so granting it in
     /// System Settings shows up here without reopening.
     private let permissionPoll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
-    private let hasNotch = NotchGeometry.current != nil
-
-    /// Menu bar settings don't apply while the player lives in the notch.
-    private var inNotch: Bool { preferences.placement == .notch && hasNotch }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            section("Player") {
-                row("Show player in", detail: hasNotch ? nil : "This Mac has no notch.") {
-                    Picker("Show player in", selection: $preferences.placement) {
-                        ForEach(Preferences.Placement.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .disabled(!hasNotch)
-                }
-            }
-
-            section("Menu bar") {
-                row("Display") {
-                    Picker("Display", selection: $preferences.display) {
-                        ForEach(Preferences.Display.allCases) { Text($0.label).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                }
-                if preferences.display != .icon {
-                    divider
-                    row("Maximum width") {
-                        HStack(spacing: 10) {
-                            Slider(value: $preferences.maxTitleWidth, in: Preferences.titleWidthRange, step: 10)
-                                .frame(width: 160)
-                                .accessibilityLabel("Maximum width")
-                            Text("\(Int(preferences.maxTitleWidth)) pt")
-                                .font(.system(size: 12).monospacedDigit())
-                                .foregroundColor(.secondary)
-                                .frame(width: 44, alignment: .trailing)
-                        }
-                    }
-                    divider
-                    toggleRow("Scroll long titles", detail: "Titles that don't fit scroll in a loop while playing.",
-                              isOn: $preferences.scrollLongTitles)
-                }
-                divider
-                toggleRow("Show progress line", isOn: $preferences.showProgress)
-            }
-            .disabled(inNotch)
-            .opacity(inNotch ? 0.5 : 1)
-
             section("Behaviour") {
-                toggleRow("Hide when nothing is playing",
-                          detail: inNotch ? "The notch stays clear when nothing is playing."
-                                          : "Open Tuno again from Finder or Spotlight to reach Settings.",
-                          isOn: $preferences.hideWhenIdle)
-                    .disabled(inNotch)
-                    .opacity(inNotch ? 0.5 : 1)
-                divider
-                toggleRow("Keep showing when paused", isOn: $preferences.showWhenPaused)
+                toggleRow("Keep showing when paused",
+                          detail: "When off, the notch clears as soon as playback pauses.",
+                          isOn: $preferences.showWhenPaused)
                 divider
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Sources").font(.system(size: 13))

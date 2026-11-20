@@ -9,18 +9,18 @@ import AppKit
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var monitor: NowPlayingMonitor?
-    private var statusItem: StatusItemController?
+    private var player: PlayerController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         monitor = NowPlayingMonitor()
-        statusItem = StatusItemController(monitor: monitor)
+        player = PlayerController(monitor: monitor)
         monitor?.start()
     }
 
-    /// Opening Tuno again while it runs shows Settings: the only way back
-    /// in when the menu bar item is hidden.
+    /// Opening Tuno again while it runs shows Settings. With no menu bar
+    /// item, that and the notch's right-click menu are the ways in.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        statusItem?.showSettings()
+        player?.showSettings()
         return false
     }
 

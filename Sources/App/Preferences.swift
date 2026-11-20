@@ -12,23 +12,6 @@ import Foundation
 final class Preferences: ObservableObject {
     static let shared = Preferences()
 
-    enum Display: String, CaseIterable, Identifiable {
-        /// Artwork and waveform only.
-        case icon
-        case iconAndTitle
-        /// Title over artist, in smaller type.
-        case twoLine
-
-        var id: String { rawValue }
-        var label: String {
-            switch self {
-            case .icon: return "Icon"
-            case .iconAndTitle: return "Icon + title"
-            case .twoLine: return "Two-line"
-            }
-        }
-    }
-
     /// Players the settings name individually; anything else is `other`.
     enum Source: String, CaseIterable, Identifiable {
         case safari, chrome, music, spotify, podcasts, other
@@ -57,28 +40,8 @@ final class Preferences: ObservableObject {
         }
     }
 
-    static let titleWidthRange: ClosedRange<Double> = 100...320
-
-    @Published var display: Display { didSet { store(display.rawValue, for: .display) } }
-    /// Widest the title may get before it scrolls or truncates, in points.
-    @Published var maxTitleWidth: Double { didSet { store(maxTitleWidth, for: .maxTitleWidth) } }
-    @Published var scrollLongTitles: Bool { didSet { store(scrollLongTitles, for: .scrollLongTitles) } }
-    @Published var showProgress: Bool { didSet { store(showProgress, for: .showProgress) } }
-    @Published var hideWhenIdle: Bool { didSet { store(hideWhenIdle, for: .hideWhenIdle) } }
     @Published var showWhenPaused: Bool { didSet { store(showWhenPaused, for: .showWhenPaused) } }
     @Published var sources: Set<Source> { didSet { store(sources.map(\.rawValue).sorted(), for: .sources) } }
-    /// Where the player lives. `.notch` only takes effect on a Mac with a notch.
-    @Published var placement: Placement { didSet { store(placement.rawValue, for: .placement) } }
-
-    enum Placement: String, CaseIterable, Identifiable {
-        case menuBar, notch
-
-        var id: String { rawValue }
-        var label: String { self == .menuBar ? "Menu bar" : "Notch" }
-    }
-
-    /// True when the notch companion stands in for the menu bar item.
-    var usesNotch: Bool { placement == .notch && NotchGeometry.current != nil }
     /// Global shortcut that opens the player; nil when the user cleared it.
     @Published var openPlayerShortcut: Shortcut? {
         didSet {
@@ -96,26 +59,16 @@ final class Preferences: ObservableObject {
     @Published var shortcutUnavailable = false
 
     private enum Key: String {
-        case display, maxTitleWidth, scrollLongTitles, showProgress, hideWhenIdle, showWhenPaused, sources
-        case openPlayerShortcut, placement
+        case showWhenPaused, sources, openPlayerShortcut
     }
 
     private let defaults: UserDefaults
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        display = defaults.string(forKey: Key.display.rawValue).flatMap(Display.init) ?? .iconAndTitle
-        maxTitleWidth = (defaults.object(forKey: Key.maxTitleWidth.rawValue) as? Double)
-            .map { min(max($0, Self.titleWidthRange.lowerBound), Self.titleWidthRange.upperBound) } ?? 150
-        scrollLongTitles = defaults.object(forKey: Key.scrollLongTitles.rawValue) as? Bool ?? true
-        showProgress = defaults.object(forKey: Key.showProgress.rawValue) as? Bool ?? false
-        hideWhenIdle = defaults.object(forKey: Key.hideWhenIdle.rawValue) as? Bool ?? false
         showWhenPaused = defaults.object(forKey: Key.showWhenPaused.rawValue) as? Bool ?? true
         sources = (defaults.stringArray(forKey: Key.sources.rawValue)).map { Set($0.compactMap(Source.init)) }
             ?? Set(Source.allCases)
-        // The notch by default where there is one: it's the better seat.
-        placement = defaults.string(forKey: Key.placement.rawValue).flatMap(Placement.init)
-            ?? (NotchGeometry.current != nil ? .notch : .menuBar)
         if let stored = defaults.array(forKey: Key.openPlayerShortcut.rawValue) as? [Int] {
             openPlayerShortcut = stored.count == 2 ? Shortcut(keyCode: UInt32(stored[0]), modifiers: UInt32(stored[1])) : nil
         } else {
@@ -123,7 +76,7 @@ final class Preferences: ObservableObject {
         }
     }
 
-    /// Whether a session from this app should show in the menu bar.
+    /// Whether a session from this app should show in the notch.
     func allows(bundleIdentifier: String?) -> Bool {
         sources.contains(Source(bundleIdentifier: bundleIdentifier))
     }
