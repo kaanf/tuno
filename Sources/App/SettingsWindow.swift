@@ -85,6 +85,15 @@ struct SettingsView: View {
                         }
                     }
                 }
+                divider
+                row("Control Music and Spotify",
+                    detail: "Needed for seeking, ±10 seconds, shuffle, repeat and favourites.") {
+                    Button("Open Settings…") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation") {
+                            NSWorkspace.shared.open(url)
+                        }
+                    }
+                }
                 if LaunchAtLogin.isAvailable {
                     divider
                     toggleRow("Launch at login", detail: loginError, isOn: Binding(

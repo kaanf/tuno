@@ -22,6 +22,8 @@
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.music</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Tuno controls Music and Spotify to seek, skip 10 seconds, and change shuffle, repeat and favourites.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Kaan Firat</string>
 </dict>

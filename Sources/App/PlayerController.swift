@@ -35,6 +35,14 @@ final class PlayerController {
     private var nameCache: [String: String] = [:]
     private var iconCache: [String: NSImage] = [:]
 
+    /// Identifies the current track, to notice changes worth a sneak peek.
+    private var trackKey: String?
+    private let scripting = PlayerScripting.shared
+    /// A shuffle, repeat or favourite change just sent. Players report the
+    /// old value for a moment after applying a change, so reads don't
+    /// overwrite this until they agree with it or it expires.
+    private var pendingState: (state: ScriptState, until: Date)?
+
     init(monitor: NowPlayingMonitor?, preferences: Preferences = .shared) {
         self.monitor = monitor
         self.preferences = preferences
@@ -44,6 +52,12 @@ final class PlayerController {
         model.onOpenApp = { [weak self] in self?.openPlayerApp() }
         model.onSettings = { [weak self] in self?.showSettings() }
         model.onQuit = { NSApp.terminate(nil) }
+        model.onSeek = { [weak self] seconds in self?.seek(to: seconds) }
+        model.onSkip = { [weak self] seconds in self?.skip(by: seconds) }
+        model.onToggleShuffle = { [weak self] in self?.toggleShuffle() }
+        model.onCycleRepeat = { [weak self] in self?.cycleRepeat() }
+        model.onToggleFavorite = { [weak self] in self?.toggleFavorite() }
+        notch.onExpand = { [weak self] in self?.refreshScriptState() }
 
         monitor?.onChange = { [weak self] reading in self?.render(reading) }
         applyPreferences()
@@ -82,14 +96,35 @@ final class PlayerController {
     }
 
     private func render(_ session: NowPlaying?) {
-        guard let reading = visible(session) else { return notch.hide() }
+        guard let reading = visible(session) else {
+            trackKey = nil
+            return notch.hide()
+        }
         let model = notch.model
         let artwork = artwork(for: reading)
         model.reading = reading
         model.artwork = artwork
         model.appName = appName(for: reading.bundleIdentifier)
         model.tint = artwork.flatMap(tint(for:))
+
+        let player = ScriptablePlayer(bundleIdentifier: reading.bundleIdentifier)
+        if model.scriptable != player {
+            model.scriptable = player
+            model.scriptState = nil
+        }
         notch.show()
+
+        let key = [reading.bundleIdentifier, reading.title, reading.artist].map { $0 ?? "" }.joined(separator: "\u{1F}")
+        if key != trackKey {
+            // Not on the first track seen: that's launch, not a change.
+            let changed = trackKey != nil
+            trackKey = key
+            // Favourite belongs to the track; a pending change was for the old one.
+            pendingState = nil
+            if changed, reading.isPlaying { notch.peek() }
+            // Favourite is per track.
+            if notch.isExpanded { refreshScriptState() }
+        }
     }
 
     /// Track artwork, the previous track's for a moment while the new one
@@ -139,6 +174,77 @@ final class PlayerController {
         let icon = NSWorkspace.shared.icon(forFile: url.path)
         iconCache[bundleIdentifier] = icon
         return icon
+    }
+
+    // MARK: - Scripting
+
+    private func refreshScriptState() {
+        guard let player = notch.model.scriptable else { return }
+        scripting.state(of: player) { [weak self] state in
+            guard let self, self.notch.model.scriptable == player else { return }
+            if let pending = self.pendingState, Date() < pending.until {
+                // The player hasn't caught up yet; keep showing the change.
+                guard state == pending.state else { return }
+            }
+            self.pendingState = nil
+            self.notch.model.scriptState = state
+        }
+    }
+
+    /// Shows a change straight away and holds it while the player applies it.
+    private func applyLocally(_ state: ScriptState) {
+        notch.model.scriptState = state
+        pendingState = (state, Date().addingTimeInterval(3))
+    }
+
+    /// Re-reads state after a change, twice, since players apply them at
+    /// their own pace.
+    private func refreshSoon() {
+        for delay in [0.5, 1.5] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.refreshScriptState()
+                self?.monitor?.refresh()
+            }
+        }
+    }
+
+    private func seek(to seconds: TimeInterval) {
+        guard let player = notch.model.scriptable else { return }
+        scripting.seek(player, to: seconds)
+        refreshSoon()
+    }
+
+    private func skip(by seconds: TimeInterval) {
+        guard let player = notch.model.scriptable else { return }
+        scripting.skip(player, by: seconds)
+        refreshSoon()
+    }
+
+    private func toggleShuffle() {
+        guard let player = notch.model.scriptable, var state = notch.model.scriptState else { return }
+        state.shuffle.toggle()
+        applyLocally(state)
+        scripting.setShuffle(player, state.shuffle)
+        refreshSoon()
+    }
+
+    private func cycleRepeat() {
+        guard let player = notch.model.scriptable, var state = notch.model.scriptState else { return }
+        let cycle = player.repeatCycle
+        let index = cycle.firstIndex(of: state.repeatMode) ?? 0
+        state.repeatMode = cycle[(index + 1) % cycle.count]
+        applyLocally(state)
+        scripting.setRepeat(player, state.repeatMode)
+        refreshSoon()
+    }
+
+    private func toggleFavorite() {
+        guard let player = notch.model.scriptable, var state = notch.model.scriptState,
+              let favorited = state.favorited else { return }
+        state.favorited = !favorited
+        applyLocally(state)
+        scripting.setFavorite(player, !favorited)
+        refreshSoon()
     }
 
     // MARK: - Actions

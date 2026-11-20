@@ -16,8 +16,18 @@ final class PlayerModel: ObservableObject {
     @Published var appName: String?
     /// Waveform colour taken from the artwork, for a dark background.
     @Published var tint: NSColor?
+    /// Set when the player can be scripted (Music, Spotify): seeking, ±10 s,
+    /// shuffle, repeat and, for Music, favourites.
+    @Published var scriptable: ScriptablePlayer?
+    /// Last read shuffle / repeat / favourite state; nil until read.
+    @Published var scriptState: ScriptState?
 
     var onCommand: (MediaKeys.Key) -> Void = { _ in }
+    var onSeek: (TimeInterval) -> Void = { _ in }
+    var onSkip: (TimeInterval) -> Void = { _ in }
+    var onToggleShuffle: () -> Void = {}
+    var onCycleRepeat: () -> Void = {}
+    var onToggleFavorite: () -> Void = {}
     var onOpenApp: () -> Void = {}
     var onSettings: () -> Void = {}
     var onQuit: () -> Void = {}

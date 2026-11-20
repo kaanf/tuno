@@ -41,6 +41,8 @@ struct NotchGeometry: Equatable {
 /// Size and state shared between the controller and the SwiftUI view.
 final class NotchState: ObservableObject {
     @Published var expanded = false
+    /// Briefly showing a new track's title under the closed notch.
+    @Published var peeking = false
     @Published var notch = CGSize(width: 180, height: 32)
     /// Whether the expanded player has a progress row (not for live streams).
     @Published var showsProgress = true
@@ -60,12 +62,19 @@ final class NotchState: ObservableObject {
         static let controlsHeight: CGFloat = 28
         /// Room around the open player for its shadow.
         static let shadowMargin: CGFloat = 24
+        /// Line added under the closed notch for a sneak peek.
+        static let peekLine: CGFloat = 22
     }
 
     var radii: (top: CGFloat, bottom: CGFloat) { expanded ? Metrics.openRadii : Metrics.closedRadii }
 
     /// The black body, not counting the outward top corners.
     var compactSize: CGSize { CGSize(width: notch.width + Metrics.wing * 2, height: notch.height) }
+
+    var peekSize: CGSize { CGSize(width: compactSize.width, height: notch.height + Metrics.peekLine) }
+
+    /// The body's size in the current state.
+    var bodySize: CGSize { expanded ? expandedSize : peeking ? peekSize : compactSize }
 
     /// Sized to its content, so there's no slack under the controls.
     var expandedSize: CGSize {
@@ -80,7 +89,14 @@ final class NotchState: ObservableObject {
 /// waveform, which opens into a small player on hover or click.
 final class NotchController {
     let model = PlayerModel()
+    /// Called when the player opens, to refresh what it shows.
+    var onExpand: (() -> Void)?
     private let state = NotchState()
+    private var peekEnd: DispatchWorkItem?
+    /// Accumulated trackpad travel in the current two-finger gesture, in
+    /// finger direction (down and right are positive).
+    private var gestureTravel = CGPoint.zero
+    private var gestureHandled = false
     private var panel: NotchPanel?
     private var geometry: NotchGeometry?
     private var hoverTimer: Timer?
@@ -105,9 +121,12 @@ final class NotchController {
         static let close = Animation.spring(response: 0.45, dampingFraction: 1.0)
         /// How long `close` takes to come to rest, before the window shrinks.
         static let closeSettle: TimeInterval = 0.5
+        /// How long a sneak peek stays up.
+        static let peek: TimeInterval = 2.8
     }
 
     var isShown: Bool { panel?.isVisible == true }
+    var isExpanded: Bool { state.expanded }
 
     init() {
         screenObserver = NotificationCenter.default.addObserver(
@@ -126,16 +145,17 @@ final class NotchController {
         let hasProgress = (model.reading?.duration ?? 0) > 0
         if state.showsProgress != hasProgress {
             state.showsProgress = hasProgress
-            if state.expanded { panel.setFrame(frame(expanded: true), display: true) }
+            if state.expanded { panel.setFrame(currentFrame, display: true) }
         }
         if geometry != self.geometry {
             self.geometry = geometry
             state.notch = geometry.rect.size
-            if panel.isVisible { panel.setFrame(frame(expanded: state.expanded), display: true) }
+            if panel.isVisible { panel.setFrame(currentFrame, display: true) }
         }
         if !panel.isVisible {
             state.expanded = false
-            panel.setFrame(frame(expanded: false), display: true)
+            state.peeking = false
+            panel.setFrame(currentFrame, display: true)
             panel.orderFrontRegardless()
         }
     }
@@ -143,9 +163,41 @@ final class NotchController {
     func hide() {
         heldOpen = false
         cancelPending()
+        peekEnd?.cancel()
         watchHover(false)
         state.expanded = false
+        state.peeking = false
         panel?.orderOut(nil)
+    }
+
+    /// Shows a new track's title under the closed notch for a moment.
+    func peek() {
+        guard let panel, panel.isVisible, !state.expanded else { return }
+        peekEnd?.cancel()
+        if !state.peeking {
+            // As when opening: grow the window, settle the layout, then animate.
+            state.peeking = true
+            let target = currentFrame
+            state.peeking = false
+            panel.setFrame(target, display: true)
+            panel.contentView?.layoutSubtreeIfNeeded()
+            DispatchQueue.main.async { [weak self] in
+                withAnimation(Self.animation(Timing.open)) { self?.state.peeking = true }
+            }
+        }
+        let end = DispatchWorkItem { [weak self] in self?.endPeek() }
+        peekEnd = end
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.peek, execute: end)
+    }
+
+    private func endPeek() {
+        guard state.peeking, !state.expanded else { return }
+        withAnimation(Self.animation(Timing.close)) { state.peeking = false }
+        shrinkWindowWhenSettled()
+    }
+
+    private static func animation(_ animation: Animation) -> Animation? {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? nil : animation
     }
 
     /// The global shortcut: open the player, or close it if it's open.
@@ -185,6 +237,42 @@ final class NotchController {
         if !state.expanded { setExpanded(true) }
     }
 
+    /// Two-finger swipes on the notch: down opens, up closes, left and
+    /// right skip tracks. One action per gesture; momentum is ignored.
+    fileprivate func scrolled(_ event: NSEvent) {
+        guard event.hasPreciseScrollingDeltas, event.momentumPhase.isEmpty else { return }
+        if event.phase == .began {
+            gestureTravel = .zero
+            gestureHandled = false
+        }
+        // In finger direction, whichever way scrolling is set to run.
+        let sign: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
+        gestureTravel.x += event.scrollingDeltaX * sign
+        gestureTravel.y += event.scrollingDeltaY * sign
+        defer {
+            if event.phase == .ended || event.phase == .cancelled { gestureHandled = false }
+        }
+        guard !gestureHandled else { return }
+
+        let (x, y) = (gestureTravel.x, gestureTravel.y)
+        if abs(y) > abs(x), y > 30, !state.expanded {
+            gestureHandled = true
+            clicked()
+        } else if abs(y) > abs(x), y < -30, state.expanded {
+            gestureHandled = true
+            heldOpen = false
+            setExpanded(false)
+        } else if abs(x) > 50, abs(x) > abs(y) * 1.5 {
+            gestureHandled = true
+            Self.haptic()
+            model.onCommand(x < 0 ? .next : .previous)
+        }
+    }
+
+    private static func haptic() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+    }
+
     private func scheduleCollapse() {
         guard state.expanded, !heldOpen, pendingCollapse == nil else { return }
         let work = DispatchWorkItem { [weak self] in
@@ -198,26 +286,36 @@ final class NotchController {
 
     private func setExpanded(_ expanded: Bool) {
         guard let panel, state.expanded != expanded else { return }
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if expanded {
+            peekEnd?.cancel()
             // Grow the window first and settle the layout at that size without
             // animation; otherwise the re-centring animates too and the shape
             // flies in from the old window's corner. Then open inside it.
-            panel.setFrame(frame(expanded: true), display: true)
+            panel.setFrame(frame(forExpanded: true), display: true)
             panel.contentView?.layoutSubtreeIfNeeded()
             DispatchQueue.main.async { [weak self] in
-                withAnimation(reduceMotion ? nil : Timing.open) { self?.state.expanded = true }
+                withAnimation(Self.animation(Timing.open)) {
+                    self?.state.expanded = true
+                    self?.state.peeking = false
+                }
             }
+            Self.haptic()
             watchHover(true)
+            onExpand?()
         } else {
             watchHover(false)
-            withAnimation(reduceMotion ? nil : Timing.close) { state.expanded = false }
-            // Shrink the window once the shape has, so the transparent area
-            // around it never blocks clicks on the menu bar.
-            DispatchQueue.main.asyncAfter(deadline: .now() + (reduceMotion ? 0 : Timing.closeSettle)) { [weak self] in
-                guard let self, !self.state.expanded else { return }
-                panel.setFrame(self.frame(expanded: false), display: true)
-            }
+            withAnimation(Self.animation(Timing.close)) { state.expanded = false }
+            shrinkWindowWhenSettled()
+        }
+    }
+
+    /// Shrinks the window once the shape has, so the transparent area around
+    /// it never blocks clicks on the menu bar.
+    private func shrinkWindowWhenSettled() {
+        let delay = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : Timing.closeSettle
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self, let panel = self.panel, !self.state.expanded, !self.state.peeking else { return }
+            panel.setFrame(self.currentFrame, display: true)
         }
     }
 
@@ -267,9 +365,11 @@ final class NotchController {
 
     // MARK: - Window
 
+    private var currentFrame: CGRect { frame(forExpanded: state.expanded) }
+
     /// Top-centred on the notch, wide enough for the outward top corners.
     /// Open, it includes room for the shadow.
-    private func frame(expanded: Bool) -> CGRect {
+    private func frame(forExpanded expanded: Bool) -> CGRect {
         guard let notch = geometry?.rect else { return .zero }
         let size: CGSize
         if expanded {
@@ -278,7 +378,7 @@ final class NotchController {
             size = CGSize(width: body.width + NotchState.Metrics.openRadii.top * 2 + margin * 2,
                           height: body.height + margin)
         } else {
-            let body = state.compactSize
+            let body = state.peeking ? state.peekSize : state.compactSize
             size = CGSize(width: body.width + NotchState.Metrics.closedRadii.top * 2, height: body.height)
         }
         return CGRect(x: notch.midX - size.width / 2, y: notch.maxY - size.height, width: size.width, height: size.height)
@@ -289,6 +389,7 @@ final class NotchController {
         let container = NotchContainerView()
         container.controller = self
         let hosting = FirstMouseHostingView(rootView: NotchView(model: model, state: state, onTap: { [weak self] in self?.clicked() }))
+        hosting.onScroll = { [weak self] event in self?.scrolled(event) }
         hosting.autoresizingMask = [.width, .height]
         container.addSubview(hosting)
         panel.contentView = container
@@ -302,7 +403,7 @@ final class NotchController {
         guard let geometry = NotchGeometry.current else { return hide() }
         self.geometry = geometry
         state.notch = geometry.rect.size
-        panel?.setFrame(frame(expanded: state.expanded), display: true)
+        panel?.setFrame(currentFrame, display: true)
     }
 }
 
@@ -341,9 +442,13 @@ private final class NotchContainerView: NSView {
     override func mouseExited(with event: NSEvent) { controller?.pointerExited() }
 }
 
-/// Buttons respond to the first click even though Tuno isn't active.
+/// Buttons respond to the first click even though Tuno isn't active;
+/// trackpad scrolls are handed to the controller as gestures.
 private final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    var onScroll: ((NSEvent) -> Void)?
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func scrollWheel(with event: NSEvent) { onScroll?(event) }
 }
 
 // MARK: - SwiftUI
@@ -383,14 +488,20 @@ private struct NotchView: View {
     let onTap: () -> Void
 
     var body: some View {
-        let size = state.expanded ? state.expandedSize : state.compactSize
+        let size = state.bodySize
         let radii = state.radii
         VStack(spacing: 0) {
             ZStack(alignment: .top) {
                 if state.expanded {
                     expanded.transition(.scale(scale: 0.85, anchor: .top).combined(with: .opacity))
                 } else {
-                    compact.transition(.opacity)
+                    VStack(spacing: 0) {
+                        compact
+                        if state.peeking {
+                            peekLine.transition(.opacity)
+                        }
+                    }
+                    .transition(.opacity)
                 }
             }
             .frame(width: size.width, height: size.height, alignment: .top)
@@ -436,6 +547,17 @@ private struct NotchView: View {
         .accessibilityAddTraits(.isButton)
     }
 
+    /// The new track, under the closed notch.
+    private var peekLine: some View {
+        Text([model.reading?.title, model.reading?.artist].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — "))
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(.white)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .padding(.horizontal, 14)
+            .frame(height: NotchState.Metrics.peekLine - 4)
+    }
+
     // MARK: Open
 
     private var expanded: some View {
@@ -445,16 +567,13 @@ private struct NotchView: View {
                 Button(action: model.onOpenApp) {
                     HStack(spacing: 12) {
                         artwork(size: NotchState.Metrics.headerHeight, radius: 10)
+                            // A glow in the artwork's own colour while playing.
+                            .shadow(color: Color(nsColor: tint).opacity(playing ? 0.7 : 0), radius: 28)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(model.reading?.title ?? "Nothing is playing")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.white)
-                                .lineLimit(1)
+                            MarqueeText(text: model.reading?.title ?? "Nothing is playing",
+                                        font: .systemFont(ofSize: 13, weight: .semibold), color: .white)
                             if let subtitle {
-                                Text(subtitle)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(Color(white: 0.63))
-                                    .lineLimit(1)
+                                MarqueeText(text: subtitle, font: .systemFont(ofSize: 12), color: Color(white: 0.63))
                             }
                         }
                         Spacer(minLength: 0)
@@ -463,23 +582,51 @@ private struct NotchView: View {
                 }
                 .buttonStyle(.plain)
                 .help(model.appName.map { "Open \($0)" } ?? "")
+                if let favorited = model.scriptState?.favorited {
+                    control(favorited ? "heart.fill" : "heart", size: 14, label: favorited ? "Unfavourite" : "Favourite",
+                            active: favorited, action: model.onToggleFavorite)
+                }
                 WaveformView(playing: playing, color: tint)
                     .frame(width: 18, height: 16)
             }
             if state.showsProgress, let reading = model.reading {
-                NotchProgress(reading: reading)
+                NotchProgress(reading: reading, fill: playing ? Color(nsColor: tint) : .white,
+                              onSeek: model.scriptable == nil ? nil : model.onSeek)
                     .frame(height: NotchState.Metrics.progressHeight)
             }
-            HStack(spacing: 28) {
-                control("backward.end.fill", size: 16, label: "Previous") { model.onCommand(.previous) }
-                control(playing ? "pause.fill" : "play.fill", size: 20, label: playing ? "Pause" : "Play") {
-                    model.onCommand(.playPause)
-                }
-                control("forward.end.fill", size: 16, label: "Next") { model.onCommand(.next) }
-            }
+            controls
         }
         .padding(.horizontal, 18)
         .padding(.bottom, NotchState.Metrics.bottomPadding)
+    }
+
+    /// Previous, play/pause, next; for scriptable players also ±10 s,
+    /// shuffle and repeat around them.
+    @ViewBuilder
+    private var controls: some View {
+        let extended = model.scriptable != nil
+        HStack(spacing: extended ? 14 : 28) {
+            if extended {
+                let shuffle = model.scriptState?.shuffle ?? false
+                control("shuffle", size: 13, label: shuffle ? "Shuffle on" : "Shuffle off", active: shuffle,
+                        action: model.onToggleShuffle)
+                    .disabled(model.scriptState == nil)
+                control("gobackward.10", size: 15, label: "Back 10 seconds") { model.onSkip(-10) }
+            }
+            control("backward.end.fill", size: 16, label: "Previous") { model.onCommand(.previous) }
+            control(playing ? "pause.fill" : "play.fill", size: 20, label: playing ? "Pause" : "Play") {
+                model.onCommand(.playPause)
+            }
+            control("forward.end.fill", size: 16, label: "Next") { model.onCommand(.next) }
+            if extended {
+                control("goforward.10", size: 15, label: "Forward 10 seconds") { model.onSkip(10) }
+                let mode = model.scriptState?.repeatMode ?? .off
+                control(mode == .one ? "repeat.1" : "repeat", size: 13,
+                        label: mode == .off ? "Repeat off" : mode == .one ? "Repeat one" : "Repeat all",
+                        active: mode != .off, action: model.onCycleRepeat)
+                    .disabled(model.scriptState == nil)
+            }
+        }
     }
 
     private var subtitle: String? {
@@ -505,11 +652,14 @@ private struct NotchView: View {
         .opacity(playing ? 1 : 0.55)
     }
 
-    private func control(_ symbol: String, size: CGFloat, label: String, action: @escaping () -> Void) -> some View {
+    /// `active` marks a toggle that is on (shuffle, repeat, favourite): it
+    /// takes the artwork's colour; when off it is dimmed.
+    private func control(_ symbol: String, size: CGFloat, label: String, active: Bool? = nil,
+                         action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: size, weight: .semibold))
-                .foregroundColor(.white)
+                .foregroundColor(active.map { $0 ? Color(nsColor: model.tint ?? .white) : Color(white: 0.5) } ?? .white)
                 .frame(width: NotchState.Metrics.controlsHeight, height: NotchState.Metrics.controlsHeight)
                 .contentShape(Rectangle())
         }
@@ -522,21 +672,32 @@ private struct NotchView: View {
 /// sample, so it moves without new data from the bridge.
 private struct NotchProgress: View {
     let reading: NowPlaying
+    var fill: Color = .white
+    /// Seeks to a position in seconds; nil when the player can't seek.
+    var onSeek: ((TimeInterval) -> Void)?
+    /// Where the bar is being dragged to, as a fraction.
+    @State private var scrub: Double?
+    @State private var hovering = false
 
     var body: some View {
         TimelineView(.periodic(from: Date(), by: 0.5)) { context in
-            let position = reading.position(at: context.date) ?? 0
             let duration = reading.duration ?? 0
+            let position = scrub.map { $0 * duration } ?? reading.position(at: context.date) ?? 0
             HStack(spacing: 8) {
                 Text(TimeText.format(position))
                 GeometryReader { geometry in
+                    let fraction = CGFloat(duration > 0 ? min(position / duration, 1) : 0)
                     ZStack(alignment: .leading) {
                         Capsule().fill(Color.white.opacity(0.2))
-                        Capsule().fill(Color.white)
-                            .frame(width: geometry.size.width * CGFloat(duration > 0 ? position / duration : 0))
+                        Capsule().fill(fill)
+                            .frame(width: geometry.size.width * fraction)
                     }
+                    .frame(height: onSeek != nil && (hovering || scrub != nil) ? 6 : 4)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(seekGesture(width: geometry.size.width, duration: duration))
                 }
-                .frame(height: 4)
+                .onHover { hovering = $0 }
                 Text(TimeText.format(duration))
             }
             .font(.system(size: 10).monospacedDigit())
@@ -544,5 +705,20 @@ private struct NotchProgress: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(TimeText.format(position)) of \(TimeText.format(duration))")
         }
+    }
+
+    /// Drag or click anywhere on the bar to seek, for players that allow it.
+    private func seekGesture(width: CGFloat, duration: TimeInterval) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard onSeek != nil, width > 0 else { return }
+                scrub = Double(min(max(value.location.x / width, 0), 1))
+            }
+            .onEnded { _ in
+                guard let onSeek, let fraction = scrub else { return }
+                onSeek(fraction * duration)
+                // Hold the scrubbed position until the player reports the new one.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { scrub = nil }
+            }
     }
 }
