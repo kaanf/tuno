@@ -34,6 +34,8 @@ swiftc -O \
 
 cp Resources/Info.plist "$CONTENTS/Info.plist"
 install -m 755 Resources/tuno-bridge.pl "$CONTENTS/Resources/tuno-bridge.pl"
+# Regenerate with scripts/make-icns.sh after editing Resources/Icon/AppIcon.svg.
+cp Resources/AppIcon.icns "$CONTENTS/Resources/AppIcon.icns"
 
 if [[ "$IDENTITY" != "-" ]] && ! security find-identity -v -p codesigning | grep -qF "\"$IDENTITY\""; then
     echo "warning: signing identity \"$IDENTITY\" not found, signing ad-hoc" >&2
