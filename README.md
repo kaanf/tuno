@@ -20,13 +20,7 @@ works with apple music, spotify, and anything playing in your browser (youtube, 
 
 ## installing
 
-grab `Tuno-x.y.z.dmg` from the [releases page](https://github.com/kaanf/tuno/releases), open it and drag tuno into applications. it runs on apple silicon macs with macos 12 or later.
-
-the app isn't notarized yet, so the first time you open it macos will say it can't check it for malware. go to system settings › privacy & security and click open anyway, or run:
-
-```sh
-xattr -dr com.apple.quarantine /Applications/Tuno.app
-```
+grab `Tuno-x.y.z.dmg` from the [releases page](https://github.com/kaanf/tuno/releases), open it and drag tuno into applications. it's signed and notarized, and runs on apple silicon macs with macos 12 or later.
 
 ## building
 
