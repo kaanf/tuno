@@ -6,13 +6,20 @@
 //
 
 import AppKit
+import CoreImage
 
-/// Artwork prepared for the menu bar: a small thumbnail, its greyscale twin
-/// for the paused state, and the tint the waveform takes from it.
+/// Artwork prepared once per image: a small thumbnail for the menu bar, its
+/// greyscale twin for the paused state, a pre-blurred backdrop for the
+/// popover, and the tint the waveform takes from it.
 struct Artwork {
     let image: NSImage
     let paused: NSImage
+    /// Blurred thumbnail. Blurring 48 px once is far cheaper than having
+    /// SwiftUI blur the full-size artwork on every render.
+    let backdrop: NSImage?
     let tint: Tint
+
+    private static let blurContext = CIContext(options: [.cacheIntermediates: false])
 
     /// Edge length the thumbnail is rendered at: 16 pt at up to 3x.
     private static let thumbnailPixels = 48
@@ -24,7 +31,15 @@ struct Artwork {
         let size = NSSize(width: 16, height: 16)
         image = NSImage(cgImage: small, size: size)
         paused = NSImage(cgImage: gray, size: size)
+        backdrop = Self.blurred(small).map { NSImage(cgImage: $0, size: size) }
         tint = Tint(dominantIn: cg)
+    }
+
+    private static func blurred(_ image: CGImage) -> CGImage? {
+        let input = CIImage(cgImage: image)
+        // Clamp first so the edges don't fade to transparent.
+        let output = input.clampedToExtent().applyingGaussianBlur(sigma: 4).cropped(to: input.extent)
+        return blurContext.createCGImage(output, from: input.extent)
     }
 
     private static func render(_ image: CGImage, side: Int, gray: Bool) -> CGImage? {

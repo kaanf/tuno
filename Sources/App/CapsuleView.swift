@@ -50,6 +50,19 @@ final class CapsuleView: NSView {
     var onResize: (() -> Void)?
     var onControl: ((MediaKeys.Key) -> Void)?
 
+    /// Keeps the capsule expanded with its controls showing, wherever the
+    /// pointer is: set while the player popover or the menu is open.
+    var isPinned = false {
+        didSet {
+            guard isPinned != oldValue else { return }
+            if isPinned {
+                setHovering(true)
+            } else if !pointerInside {
+                setHovering(false)
+            }
+        }
+    }
+
     var maxTitleWidth: CGFloat = 150 {
         didSet { if maxTitleWidth != oldValue { relayout() } }
     }
@@ -59,8 +72,11 @@ final class CapsuleView: NSView {
     /// Index of the inline control under the pointer.
     private var hoveredControl: Int?
     private var marqueeRunning = false
-    private var resizeTimer: Timer?
+    /// Bumped on every layout, so a finished resize animation can tell
+    /// whether a newer layout has replaced it.
+    private var layoutGeneration = 0
     private var hoverWatch: Timer?
+    private var trackingArea: NSTrackingArea?
 
     /// Room the status item keeps for the capsule: its hovered width, always.
     /// macOS animates other menu bar items whenever an item's length changes,
@@ -127,63 +143,63 @@ final class CapsuleView: NSView {
 
     private var titleWidth: CGFloat { min(textWidth, maxTitleWidth) }
 
-    /// Hugs the title up to `maxTitleWidth`; while hovering it grows by the
-    /// room the controls need, so the title never gives way to them.
-    var preferredWidth: CGFloat { width(hovering: hovering) }
-
+    /// Width of the visible capsule: hugs the title up to `maxTitleWidth`,
+    /// and while hovering grows by the room the controls need, so the title
+    /// never gives way to them.
     private func width(hovering: Bool) -> CGFloat {
         let trailing = hovering ? Metrics.controls : Metrics.wave.width
         return ceil(Metrics.leading + Metrics.artwork + Metrics.gap + titleWidth + Metrics.gap + trailing + Metrics.trailing)
     }
 
-    private var controlsX: CGFloat { bounds.width - Metrics.trailing - Metrics.controls }
-
-    /// Lays everything out at the target width. With `animated`, the width
-    /// eases there first and the controls appear once it has arrived.
-    private func relayout(animated: Bool = false) {
-        let target = preferredWidth
-        resizeTimer?.invalidate()
-        resizeTimer = nil
-
-        let start = frame.width
-        guard animated, !reduceMotion, abs(target - start) > 0.5 else {
-            apply(width: target)
-            controls.isHidden = !hovering
-            onResize?()
-            return
-        }
-
-        let began = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] timer in
-            guard let self else { return timer.invalidate() }
-            let t = min(1, (CACurrentMediaTime() - began) / Metrics.resizeDuration)
-            let eased = 1 - pow(1 - t, 3)
-            self.apply(width: (start + (target - start) * CGFloat(eased)).rounded())
-            guard t >= 1 else { return }
-            timer.invalidate()
-            self.resizeTimer = nil
-            self.controls.isHidden = !self.hovering
-        }
-        // Common modes, so it keeps running while a menu is tracking.
-        RunLoop.main.add(timer, forMode: .common)
-        resizeTimer = timer
+    /// The visible capsule inside the view. The view always spans
+    /// `reservedWidth`; the capsule is pinned to its right edge and grows
+    /// left when hovered.
+    var capsuleBounds: CGRect {
+        let width = width(hovering: hovering)
+        return CGRect(x: bounds.width - width, y: 0, width: width, height: Metrics.height)
     }
 
-    private func apply(width: CGFloat) {
-        if frame.width != width {
-            setFrameSize(NSSize(width: width, height: Metrics.height))
+    private var controlsX: CGFloat { bounds.width - Metrics.trailing - Metrics.controls }
+
+    /// Lays everything out for the current state. With `animated`, the
+    /// capsule's edge, artwork and title slide in Core Animation, and the
+    /// controls appear once the capsule has widened.
+    ///
+    /// The view's own frame never changes for a hover. A changing frame makes
+    /// AppKit re-snapshot the status item on the CPU (for the menu bar on
+    /// other displays) on every frame; moving layers costs one snapshot.
+    private func relayout(animated: Bool = false) {
+        if frame.width != reservedWidth {
+            setFrameSize(NSSize(width: reservedWidth, height: Metrics.height))
             onResize?()
         }
+        layoutGeneration += 1
+        let generation = layoutGeneration
+        let animate = animated && !reduceMotion
+        let capsule = capsuleBounds
+        let lineHeight = ceil(titleFont.ascender - titleFont.descender + titleFont.leading)
+
+        CATransaction.begin()
+        if animate {
+            CATransaction.setAnimationDuration(Metrics.resizeDuration)
+            // Ease-out cubic: quick to respond, gentle to settle.
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.33, 1, 0.68, 1))
+            CATransaction.setCompletionBlock { [weak self] in
+                guard let self, self.layoutGeneration == generation else { return }
+                self.controls.isHidden = !self.hovering
+            }
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+        background.frame = capsule
+        artworkLayer.frame = CGRect(x: capsule.minX + Metrics.leading, y: (Metrics.height - Metrics.artwork) / 2,
+                                    width: Metrics.artwork, height: Metrics.artwork)
+        titleClip.frame = CGRect(x: artworkLayer.frame.maxX + Metrics.gap, y: (Metrics.height - lineHeight) / 2,
+                                 width: titleWidth, height: lineHeight)
+        CATransaction.commit()
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        background.frame = bounds
-        artworkLayer.frame = CGRect(x: Metrics.leading, y: (Metrics.height - Metrics.artwork) / 2,
-                                    width: Metrics.artwork, height: Metrics.artwork)
-
-        let titleX = artworkLayer.frame.maxX + Metrics.gap
-        let lineHeight = ceil(titleFont.ascender - titleFont.descender + titleFont.leading)
-        titleClip.frame = CGRect(x: titleX, y: (Metrics.height - lineHeight) / 2, width: titleWidth, height: lineHeight)
         if !marqueeRunning {
             titleLayer.frame = CGRect(x: 0, y: 0, width: titleWidth, height: lineHeight)
         }
@@ -191,8 +207,7 @@ final class CapsuleView: NSView {
             layer.font = titleFont
             layer.fontSize = titleFont.pointSize
         }
-
-        waveLayer.frame = CGRect(x: width - Metrics.trailing - Metrics.wave.width,
+        waveLayer.frame = CGRect(x: bounds.width - Metrics.trailing - Metrics.wave.width,
                                  y: (Metrics.height - Metrics.wave.height) / 2,
                                  width: Metrics.wave.width, height: Metrics.wave.height)
         waveLayer.isHidden = hovering
@@ -200,6 +215,8 @@ final class CapsuleView: NSView {
 
         controls.frame = CGRect(x: controlsX, y: (Metrics.height - Metrics.control) / 2,
                                 width: Metrics.controls, height: Metrics.control)
+        if !animate { controls.isHidden = !hovering }
+        updateTracking()
     }
 
     // MARK: - Appearance
@@ -352,10 +369,17 @@ final class CapsuleView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        trackingAreas.forEach(removeTrackingArea)
+        updateTracking()
+    }
+
+    /// Tracks the visible capsule only, not the room reserved beside it.
+    private func updateTracking() {
+        if let trackingArea { removeTrackingArea(trackingArea) }
         // The status bar window is never key, so track regardless of activation.
-        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
-                                       owner: self, userInfo: nil))
+        let area = NSTrackingArea(rect: capsuleBounds, options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
     }
 
     override func mouseEntered(with event: NSEvent) { setHovering(true) }
@@ -394,7 +418,7 @@ final class CapsuleView: NSView {
     }
 
     private func setHovering(_ value: Bool) {
-        guard hovering != value, content != nil else { return }
+        guard hovering != value, content != nil, value || !isPinned else { return }
         // Before the flag flips, so the stopped marquee's relayout keeps the old width.
         stopMarquee()
         hovering = value
@@ -420,10 +444,10 @@ final class CapsuleView: NSView {
         case none
     }
 
-    /// The capsule's frame in screen coordinates.
+    /// The visible capsule's frame in screen coordinates.
     var screenFrame: NSRect? {
         guard let window, !isHidden else { return nil }
-        return window.convertToScreen(convert(bounds, to: nil))
+        return window.convertToScreen(convert(capsuleBounds, to: nil))
     }
 
     /// What a click at `screenPoint` lands on. Works from the screen position
@@ -432,7 +456,7 @@ final class CapsuleView: NSView {
     func zone(atScreen screenPoint: NSPoint) -> Zone {
         guard let window else { return .none }
         let point = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
-        guard point.x >= 0, point.x < bounds.width else { return .none }
+        guard point.x >= capsuleBounds.minX, point.x < bounds.width else { return .none }
         if point.x < titleClip.frame.maxX + Metrics.gap / 2 { return .title }
         guard !controls.isHidden else { return .none }
 
@@ -462,6 +486,11 @@ final class CapsuleView: NSView {
         titleLayer.truncationMode = .end
         titleLayer.isWrapped = false
         titleLayer.alignmentMode = .left
+        // Text re-renders when the title, its width or the marquee changes;
+        // the default 0.25 s crossfade would show old and new text overlapping.
+        let still: [String: CAAction] = ["contents": NSNull(), "bounds": NSNull(), "position": NSNull()]
+        titleLayer.actions = still
+        titleEcho.actions = still
         titleEcho.isWrapped = false
         titleEcho.alignmentMode = .left
         titleEcho.isHidden = true

@@ -6,16 +6,21 @@
 //
 
 import AppKit
+import SwiftUI
 
 /// The menu bar item: the artwork capsule while something is playing, a
-/// plain note symbol otherwise, and a menu for playback controls until the
-/// player popover lands.
-final class StatusItemController: NSObject, NSMenuDelegate {
+/// plain note symbol otherwise. A left click on the artwork or title opens
+/// the player popover; a right click opens the menu.
+final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let monitor: NowPlayingMonitor?
     private let menu = NSMenu()
     private let capsule = CapsuleView(frame: NSRect(x: 0, y: 0, width: 0, height: CapsuleView.Metrics.height))
-
+    private let player = PlayerModel()
+    private let popover = NSPopover()
+    /// When the popover last closed. A click on the capsule that closes a
+    /// transient popover must not reopen it on release.
+    private var popoverClosedAt = Date.distantPast
 
     // Artwork is decoded once per image; the monitor hands out a new NSImage
     // only when the bytes change, so identity is a cheap change check.
@@ -29,8 +34,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private var artworkGraceEnds: Date?
 
     private var mouseMonitor: Any?
-    /// A press that should open the menu once the button is released.
-    private var menuOnRelease = false
+
+    /// What a press on the item opens once the button is released.
+    private enum Release { case menu, popover }
+    private var pendingRelease: Release?
 
     /// Widest the title may get, in points, before it is truncated.
     var maxTitleWidth: CGFloat {
@@ -57,6 +64,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         capsule.onResize = { [weak self] in self?.fitCapsule() }
         capsule.onControl = { [weak self] key in self?.press(key) }
         statusItem.button?.addSubview(capsule)
+        setUpPopover()
         render(nil)
 
         monitor?.onChange = { [weak self] reading in self?.render(reading) }
@@ -69,7 +77,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func render(_ reading: NowPlaying?) {
         guard let button = statusItem.button else { return }
+        defer { if popover.isShown { syncPlayer() } }
         guard let reading, let artwork = artwork(for: reading) else {
+            // The popover is anchored to the capsule; it can't outlive it.
+            if popover.isShown { popover.performClose(nil) }
             capsule.isHidden = true
             statusItem.length = NSStatusItem.variableLength
             button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Tuno")
@@ -91,10 +102,8 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         guard !capsule.isHidden, let button = statusItem.button else { return }
         let length = capsule.reservedWidth
         if statusItem.length != length { statusItem.length = length }
-        // Pinned to the right edge, so hovering grows it toward the left
-        // inside the room the item already has.
         let y = floor((button.bounds.height - CapsuleView.Metrics.height) / 2)
-        capsule.setFrameOrigin(NSPoint(x: length - capsule.frame.width, y: y))
+        capsule.setFrameOrigin(NSPoint(x: 0, y: y))
     }
 
     /// Track artwork, or the player app's icon when the track has none.
@@ -136,6 +145,81 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         iconCache[key] = icon
         return icon
+    }
+
+    private var nameCache: [String: String] = [:]
+
+    private func appName(for bundleIdentifier: String?) -> String? {
+        guard let bundleIdentifier else { return nil }
+        if let cached = nameCache[bundleIdentifier] { return cached }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else { return nil }
+        let name = FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+        nameCache[bundleIdentifier] = name
+        return name
+    }
+
+    // MARK: - Popover
+
+    private func setUpPopover() {
+        player.onCommand = { [weak self] key in self?.press(key) }
+        player.onOpenApp = { [weak self] in self?.openPlayerApp() }
+        player.onCopy = { [weak self] in self?.copyTrack() }
+        player.onAllowAccessibility = {
+            MediaKeys.requestTrust()
+            MediaKeys.openAccessibilitySettings()
+        }
+        player.onQuit = { NSApp.terminate(nil) }
+
+        popover.behavior = .transient
+        popover.animates = true
+        popover.delegate = self
+        popover.contentViewController = NSHostingController(rootView: PlayerView(model: player))
+    }
+
+    /// Brings the popover's model up to date. Done only while the popover is
+    /// open (and just before it opens), so a closed popover costs nothing.
+    private func syncPlayer() {
+        let reading = monitor?.current
+        player.reading = reading
+        player.appName = appName(for: reading?.bundleIdentifier)
+        player.backdrop = reading?.artwork == nil ? nil : prepared?.backdrop
+        player.canControl = MediaKeys.isTrusted
+    }
+
+    private func togglePopover() {
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        guard !capsule.isHidden else { return }
+        syncPlayer()
+        if let view = popover.contentViewController?.view {
+            popover.contentSize = view.fittingSize
+        }
+        // An accessory app has to be active for a transient popover to take
+        // focus and close on outside clicks.
+        NSApp.activate(ignoringOtherApps: true)
+        capsule.isPinned = true
+        popover.show(relativeTo: capsule.capsuleBounds, of: capsule, preferredEdge: .minY)
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popoverClosedAt = Date()
+        capsule.isPinned = false
+    }
+
+    private func openPlayerApp() {
+        guard let id = monitor?.current?.bundleIdentifier,
+              let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return }
+        popover.performClose(nil)
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    private func copyTrack() {
+        guard let reading = monitor?.current else { return }
+        let text = [reading.title, reading.artist].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     // MARK: - Menu
@@ -185,7 +269,15 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         if event.type == .leftMouseDown, !capsule.isHidden {
             switch capsule.zone(atScreen: location) {
             case .title:
-                break
+                // A transient popover closes itself on this very press; don't
+                // let the release open it again.
+                let justClosed = Date().timeIntervalSince(popoverClosedAt) < 0.3
+                if popover.isShown {
+                    popover.performClose(nil)
+                } else if !justClosed {
+                    pendingRelease = .popover
+                }
+                return true
             case .control(let key):
                 press(key)
                 return true
@@ -195,15 +287,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         }
         // macOS highlights a menu bar item when a menu starts tracking while
         // the button is down, so wait for the release.
-        menuOnRelease = true
+        if popover.isShown { popover.performClose(nil) }
+        pendingRelease = .menu
         return true
     }
 
     private func handleMouseUp() -> Bool {
-        guard menuOnRelease else { return false }
-        menuOnRelease = false
-        // Open after the event is consumed: popUp runs its own tracking loop.
-        DispatchQueue.main.async { [weak self] in self?.showMenu() }
+        guard let release = pendingRelease else { return false }
+        pendingRelease = nil
+        // After the event is consumed: popUp runs its own tracking loop.
+        DispatchQueue.main.async { [weak self] in
+            switch release {
+            case .menu: self?.showMenu()
+            case .popover: self?.togglePopover()
+            }
+        }
         return true
     }
 
@@ -212,7 +310,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private func showMenu() {
         guard let button = statusItem.button, let window = button.window else { return }
         let left = capsule.screenFrame?.minX ?? window.frame.minX
+        capsule.isPinned = true
+        // Blocks until the menu closes.
         menu.popUp(positioning: nil, at: NSPoint(x: left, y: window.frame.minY - 4), in: nil)
+        capsule.isPinned = false
     }
 
     @objc private func playPause() { press(.playPause) }
