@@ -1,5 +1,7 @@
 # tuno
 
+<p align="center"><img src="docs/hero.png" alt="tuno playing a song in the notch" width="100%"></p>
+
 a little now playing player for macs with a notch.
 
 it sits on both sides of the notch with the album art and a small waveform. hover over it and it opens into a player with the title, artist, progress and controls. move away and it tucks back in.
@@ -67,4 +69,4 @@ everything stays on your mac. no accounts, no analytics, no network requests.
 
 ---
 
-made by kaan firat
+made by Kaan Fırat
