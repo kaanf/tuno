@@ -1,56 +1,70 @@
-# Tuno
+# tuno
 
-A macOS menu bar companion for whatever is playing: Apple Music, Spotify, or
-a video in your browser.
+a little now playing player for macs with a notch.
 
-> Early development. The bridge and playback controls work; the menu bar
-> capsule, player popover, settings and notch companion from the design are
-> next.
+it sits on both sides of the notch with the album art and a small waveform. hover over it and it opens into a player with the title, artist, progress and controls. move away and it tucks back in.
 
-## How it works
+works with apple music, spotify, and anything playing in your browser (youtube, soundcloud and so on).
 
-macOS keeps one system-wide Now Playing session. Tuno reads it through the
-private MediaRemote framework, which since macOS 15.4 only answers Apple's own
-entitled processes. Tuno therefore builds a small bridge library
-(`Sources/Bridge/TunoBridge.m`) and runs it inside the system's signed
-`/usr/bin/perl` via `Resources/tuno-bridge.pl`.
+## what it does
 
-The bridge runs as one long-lived child process. It listens for MediaRemote
-change notifications and writes a JSON line for each change: title, artist,
-album, player app, play state, duration, elapsed time and artwork. Tuno
-calculates playback progress locally between updates, so nothing polls.
+- artwork on the left of the notch, a waveform in the artwork's colour on the right
+- hover, click, or swipe down with two fingers to open the player
+- swipe left or right on the notch to skip tracks
+- when the song changes, the new title shows up under the notch for a few seconds
+- for apple music and spotify you also get seeking (click or drag the progress bar), 10 second skips, shuffle and repeat, plus favourites in music
+- ⌥⌘P opens and closes it from anywhere. you can change the shortcut in settings
+- no notch? it draws one at the top of your screen
 
-Playback control posts the same events as the keyboard's media keys. These go
-to the app that owns the session and need Accessibility permission.
+## building
 
-## Build
-
-Requires macOS 12+ and the Xcode command line tools.
+there's no release yet, so for now you build it yourself:
 
 ```sh
 ./build.sh
 open build/Tuno.app
 ```
 
-The build signs with the Apple Development certificate by default. Set
-`IDENTITY="…"` to use another certificate, or `IDENTITY=-` for ad-hoc signing.
-Ad-hoc builds lose the Accessibility permission each time you rebuild.
+you need macos 12 or later and the xcode command line tools. the liquid glass icon needs xcode 26, without it you get the regular icon.
 
-## Layout
+the build signs with my developer certificate when it's on the machine, and falls back to ad-hoc signing otherwise. to use your own, run `IDENTITY="your cert name" ./build.sh`. with ad-hoc signing macos forgets the accessibility permission every time you rebuild, which gets old fast.
+
+## permissions
+
+- **accessibility**: play, pause and skip are sent as media key presses, which needs this
+- **automation**: only for the apple music and spotify extras. macos asks the first time you open the player while one of them is playing
+
+you can check both under settings › system.
+
+## settings
+
+right click the notch and choose settings, or open tuno again from finder or spotlight. there's no menu bar icon, so that's how you get in.
+
+in there you can pick which apps tuno shows (safari, chrome, music, spotify, podcasts, everything else), whether it stays up when you pause, the shortcut, and launch at login.
+
+## how it works
+
+since macos 15.4 apple only lets its own apps read the now playing info. tuno gets around that by building a tiny library (`Sources/Bridge/TunoBridge.m`) and loading it into the system's `/usr/bin/perl`, which macos still trusts. the bridge stays running, listens for changes, and writes one line of json each time something changes, so nothing is polling.
+
+play, pause and skip are sent the same way your keyboard's media keys are. seeking and the rest go through applescript, which is why they only work with music and spotify.
+
+## project layout
 
 ```text
-Sources/Bridge/TunoBridge.m          MediaRemote bridge (dylib)
-Sources/App/NowPlaying.swift         one reading of the session
-Sources/App/NowPlayingMonitor.swift  runs the bridge, parses its stream
-Sources/App/MediaKeys.swift          play/pause, next, previous
-Sources/App/StatusItemController.swift  menu bar item
-Resources/tuno-bridge.pl             loads the bridge into /usr/bin/perl
+Sources/Bridge/TunoBridge.m            reads now playing through mediaremote
+Resources/tuno-bridge.pl               loads the bridge into /usr/bin/perl
+Sources/App/NowPlayingMonitor.swift    runs the bridge and parses what it sends
+Sources/App/PlayerController.swift     filters, artwork, shortcut, settings
+Sources/App/NotchCompanion.swift       the notch itself
+Sources/App/PlayerScripting.swift      applescript for music and spotify
+Sources/App/MediaKeys.swift            play, pause, next, previous
+Resources/Icon/                        icon sources (svg + icon composer)
 ```
 
-## Privacy
+## privacy
 
-Everything stays on your Mac. No accounts, analytics or network access.
+everything stays on your mac. no accounts, no analytics, no network requests.
 
 ---
 
-© 2026 Kaan Firat
+made by kaan firat
