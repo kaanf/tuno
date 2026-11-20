@@ -117,8 +117,7 @@ final class CapsuleView: NSView {
     private let fadeMask = CAGradientLayer()
     private let progressTrack = CALayer()
     private let progressFill = CALayer()
-    private let waveLayer = CALayer()
-    private let bars = (0..<4).map { _ in CALayer() }
+    private let waveLayer = WaveformLayer()
     private let controls = NSStackView()
     private let playPauseButton = NSButton()
 
@@ -301,7 +300,6 @@ final class CapsuleView: NSView {
         let scale = window?.backingScaleFactor ?? 2
         [background, artworkLayer, titleClip, titleLayer, titleEcho, subtitleLayer, waveLayer, progressTrack, progressFill]
             .forEach { $0.contentsScale = scale }
-        bars.forEach { $0.contentsScale = scale }
     }
 
     private func applyColors() {
@@ -317,7 +315,7 @@ final class CapsuleView: NSView {
             titleEcho.foregroundColor = titleLayer.foregroundColor
             subtitleLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
             let barColor = content.isPlaying ? content.tint.color(onDark: dark) : NSColor.secondaryLabelColor
-            bars.forEach { $0.backgroundColor = barColor.cgColor }
+            waveLayer.color = barColor.cgColor
             progressTrack.backgroundColor = chip.withAlphaComponent(dark ? 0.16 : 0.10).cgColor
             progressFill.backgroundColor = barColor.cgColor
             for (index, view) in controls.arrangedSubviews.enumerated() {
@@ -335,38 +333,8 @@ final class CapsuleView: NSView {
 
     // MARK: - Waveform
 
-    /// Per-bar period and offset, so the bars never move in lockstep.
-    private static let barTiming: [(period: CFTimeInterval, delay: CFTimeInterval)] =
-        [(0.95, 0), (0.75, 0.2), (1.15, 0.1), (0.85, 0.35)]
-
     private func updateWaveAnimation() {
-        let playing = content?.isPlaying ?? false
-        let animate = playing && !reduceMotion
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        for (index, bar) in bars.enumerated() {
-            let x = 0.5 + CGFloat(index) * 3.7
-            // Full-height bars scaled down while playing; short flat bars when paused.
-            bar.frame = playing ? CGRect(x: x, y: 1, width: 2, height: 10) : CGRect(x: x, y: 4.5, width: 2, height: 3)
-            bar.removeAnimation(forKey: "level")
-            bar.transform = CATransform3DIdentity
-            guard animate else {
-                if playing { bar.transform = CATransform3DMakeScale(1, 0.6, 1) }
-                continue
-            }
-            let timing = Self.barTiming[index]
-            let level = CABasicAnimation(keyPath: "transform.scale.y")
-            level.fromValue = 0.3
-            level.toValue = 1
-            level.duration = timing.period / 2
-            level.autoreverses = true
-            level.repeatCount = .infinity
-            level.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            level.beginTime = CACurrentMediaTime() + timing.delay
-            level.fillMode = .backwards
-            bar.add(level, forKey: "level")
-        }
-        CATransaction.commit()
+        waveLayer.update(playing: content?.isPlaying ?? false, animated: !reduceMotion)
     }
 
     // MARK: - Progress
@@ -615,10 +583,6 @@ final class CapsuleView: NSView {
         fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
         fadeMask.colors = [NSColor.clear.cgColor, NSColor.black.cgColor, NSColor.black.cgColor, NSColor.clear.cgColor]
 
-        bars.forEach {
-            $0.cornerRadius = 1
-            waveLayer.addSublayer($0)
-        }
         root.addSublayer(waveLayer)
     }
 

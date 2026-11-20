@@ -18,6 +18,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let preferences: Preferences
     private var preferencesObserver: AnyCancellable?
     private lazy var settingsWindow = SettingsWindowController(preferences: preferences)
+    private let notch = NotchController()
     private let menu = NSMenu()
     private let capsule = CapsuleView(frame: NSRect(x: 0, y: 0, width: 0, height: CapsuleView.Metrics.height))
     private let player = PlayerModel()
@@ -116,7 +117,19 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         guard let button = statusItem.button else { return }
         defer { if popover.isShown { syncPlayer() } }
         let reading = visible(session)
-        guard let reading, let artwork = artwork(for: reading) else {
+        let artwork = reading.flatMap { artwork(for: $0) }
+
+        // In the notch the menu bar item steps aside entirely.
+        if preferences.usesNotch {
+            if popover.isShown { popover.performClose(nil) }
+            statusItem.isVisible = false
+            capsule.isHidden = true
+            if let reading, let artwork { updateNotch(reading, artwork: artwork) } else { notch.hide() }
+            return
+        }
+        notch.hide()
+
+        guard let reading, let artwork else {
             // The popover is anchored to the capsule; it can't outlive it.
             if popover.isShown { popover.performClose(nil) }
             statusItem.isVisible = !preferences.hideWhenIdle
@@ -191,6 +204,15 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         return icon
     }
 
+    private func updateNotch(_ reading: NowPlaying, artwork: Artwork) {
+        let model = notch.model
+        model.reading = reading
+        model.appName = appName(for: reading.bundleIdentifier)
+        model.tint = artwork.tint.color(onDark: true)
+        model.fallbackArtwork = reading.artwork == nil ? appIcon(for: reading.bundleIdentifier) : nil
+        notch.show()
+    }
+
     private var nameCache: [String: String] = [:]
 
     private func appName(for bundleIdentifier: String?) -> String? {
@@ -214,6 +236,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
         player.onQuit = { NSApp.terminate(nil) }
         player.onSettings = { [weak self] in self?.showSettings() }
+        notch.model.onCommand = { [weak self] key in self?.press(key) }
+        notch.model.onSettings = { [weak self] in self?.showSettings() }
+        notch.model.onQuit = { NSApp.terminate(nil) }
 
         popover.behavior = .transient
         popover.animates = true
@@ -243,6 +268,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     /// The global shortcut. Opens even when nothing is playing, anchored to
     /// the note icon; with the item hidden there is nothing to anchor to.
     private func togglePopoverFromKeyboard() {
+        if preferences.usesNotch {
+            return notch.isShown ? notch.toggleFromKeyboard() : NSSound.beep()
+        }
         guard popover.isShown || statusItem.isVisible else { return NSSound.beep() }
         togglePopover()
     }

@@ -67,6 +67,18 @@ final class Preferences: ObservableObject {
     @Published var hideWhenIdle: Bool { didSet { store(hideWhenIdle, for: .hideWhenIdle) } }
     @Published var showWhenPaused: Bool { didSet { store(showWhenPaused, for: .showWhenPaused) } }
     @Published var sources: Set<Source> { didSet { store(sources.map(\.rawValue).sorted(), for: .sources) } }
+    /// Where the player lives. `.notch` only takes effect on a Mac with a notch.
+    @Published var placement: Placement { didSet { store(placement.rawValue, for: .placement) } }
+
+    enum Placement: String, CaseIterable, Identifiable {
+        case menuBar, notch
+
+        var id: String { rawValue }
+        var label: String { self == .menuBar ? "Menu bar" : "Notch" }
+    }
+
+    /// True when the notch companion stands in for the menu bar item.
+    var usesNotch: Bool { placement == .notch && NotchGeometry.current != nil }
     /// Global shortcut that opens the player; nil when the user cleared it.
     @Published var openPlayerShortcut: Shortcut? {
         didSet {
@@ -85,7 +97,7 @@ final class Preferences: ObservableObject {
 
     private enum Key: String {
         case display, maxTitleWidth, scrollLongTitles, showProgress, hideWhenIdle, showWhenPaused, sources
-        case openPlayerShortcut
+        case openPlayerShortcut, placement
     }
 
     private let defaults: UserDefaults
@@ -101,6 +113,9 @@ final class Preferences: ObservableObject {
         showWhenPaused = defaults.object(forKey: Key.showWhenPaused.rawValue) as? Bool ?? true
         sources = (defaults.stringArray(forKey: Key.sources.rawValue)).map { Set($0.compactMap(Source.init)) }
             ?? Set(Source.allCases)
+        // The notch by default where there is one: it's the better seat.
+        placement = defaults.string(forKey: Key.placement.rawValue).flatMap(Placement.init)
+            ?? (NotchGeometry.current != nil ? .notch : .menuBar)
         if let stored = defaults.array(forKey: Key.openPlayerShortcut.rawValue) as? [Int] {
             openPlayerShortcut = stored.count == 2 ? Shortcut(keyCode: UInt32(stored[0]), modifiers: UInt32(stored[1])) : nil
         } else {

@@ -15,6 +15,10 @@ final class PlayerModel: ObservableObject {
     /// Display name of the app that owns the session, e.g. "Music".
     @Published var appName: String?
     @Published var canControl = MediaKeys.isTrusted
+    /// Waveform colour taken from the artwork, for a dark background.
+    @Published var tint: NSColor?
+    /// Shown when the track has no artwork: the player app's icon.
+    @Published var fallbackArtwork: NSImage?
     /// The global shortcut that toggles this popover, e.g. "⌥⌘P".
     @Published var shortcut: String?
 
@@ -199,7 +203,7 @@ private struct ArtworkWell: View {
 
 /// Progress bar and times. Ticks locally from the last sample, so it moves
 /// smoothly without new data from the bridge.
-private struct PlaybackProgress: View {
+struct PlaybackProgress: View {
     let reading: NowPlaying
 
     var body: some View {

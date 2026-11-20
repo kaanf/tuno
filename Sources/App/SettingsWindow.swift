@@ -40,9 +40,25 @@ struct SettingsView: View {
     /// Re-checks permission while the window is open, so granting it in
     /// System Settings shows up here without reopening.
     private let permissionPoll = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+    private let hasNotch = NotchGeometry.current != nil
+
+    /// Menu bar settings don't apply while the player lives in the notch.
+    private var inNotch: Bool { preferences.placement == .notch && hasNotch }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
+            section("Player") {
+                row("Show player in", detail: hasNotch ? nil : "This Mac has no notch.") {
+                    Picker("Show player in", selection: $preferences.placement) {
+                        ForEach(Preferences.Placement.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .disabled(!hasNotch)
+                }
+            }
+
             section("Menu bar") {
                 row("Display") {
                     Picker("Display", selection: $preferences.display) {
@@ -72,11 +88,16 @@ struct SettingsView: View {
                 divider
                 toggleRow("Show progress line", isOn: $preferences.showProgress)
             }
+            .disabled(inNotch)
+            .opacity(inNotch ? 0.5 : 1)
 
             section("Behaviour") {
                 toggleRow("Hide when nothing is playing",
-                          detail: "Open Tuno again from Finder or Spotlight to reach Settings.",
+                          detail: inNotch ? "The notch stays clear when nothing is playing."
+                                          : "Open Tuno again from Finder or Spotlight to reach Settings.",
                           isOn: $preferences.hideWhenIdle)
+                    .disabled(inNotch)
+                    .opacity(inNotch ? 0.5 : 1)
                 divider
                 toggleRow("Keep showing when paused", isOn: $preferences.showWhenPaused)
                 divider
