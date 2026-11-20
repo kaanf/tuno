@@ -67,9 +67,25 @@ final class Preferences: ObservableObject {
     @Published var hideWhenIdle: Bool { didSet { store(hideWhenIdle, for: .hideWhenIdle) } }
     @Published var showWhenPaused: Bool { didSet { store(showWhenPaused, for: .showWhenPaused) } }
     @Published var sources: Set<Source> { didSet { store(sources.map(\.rawValue).sorted(), for: .sources) } }
+    /// Global shortcut that opens the player; nil when the user cleared it.
+    @Published var openPlayerShortcut: Shortcut? {
+        didSet {
+            // An empty array records "cleared", as opposed to "never set".
+            store(openPlayerShortcut.map { [Int($0.keyCode), Int($0.modifiers)] } ?? [Int](), for: .openPlayerShortcut)
+        }
+    }
+
+    // Not stored: state shared between the settings window and the hotkey.
+
+    /// True while the settings window records a new shortcut, so the current
+    /// one is released and its keys can be typed.
+    @Published var isRecordingShortcut = false
+    /// True when macOS refused the shortcut, usually because another app owns it.
+    @Published var shortcutUnavailable = false
 
     private enum Key: String {
         case display, maxTitleWidth, scrollLongTitles, showProgress, hideWhenIdle, showWhenPaused, sources
+        case openPlayerShortcut
     }
 
     private let defaults: UserDefaults
@@ -85,6 +101,11 @@ final class Preferences: ObservableObject {
         showWhenPaused = defaults.object(forKey: Key.showWhenPaused.rawValue) as? Bool ?? true
         sources = (defaults.stringArray(forKey: Key.sources.rawValue)).map { Set($0.compactMap(Source.init)) }
             ?? Set(Source.allCases)
+        if let stored = defaults.array(forKey: Key.openPlayerShortcut.rawValue) as? [Int] {
+            openPlayerShortcut = stored.count == 2 ? Shortcut(keyCode: UInt32(stored[0]), modifiers: UInt32(stored[1])) : nil
+        } else {
+            openPlayerShortcut = .openPlayerDefault
+        }
     }
 
     /// Whether a session from this app should show in the menu bar.

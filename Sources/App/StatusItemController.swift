@@ -38,6 +38,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private var artworkGraceEnds: Date?
 
     private var mouseMonitor: Any?
+    private lazy var hotKey = GlobalHotKey { [weak self] in self?.togglePopoverFromKeyboard() }
+    /// The shortcut last handed to `hotKey`; `.none` until the first apply.
+    private var appliedShortcut: Shortcut?? = .none
 
     /// What a press on the item opens once the button is released.
     private enum Release { case menu, popover }
@@ -86,7 +89,17 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         capsule.maxTitleWidth = CGFloat(preferences.maxTitleWidth)
         capsule.scrollsLongTitles = preferences.scrollLongTitles
         capsule.showsProgress = preferences.showProgress
+        applyShortcut()
         render(monitor?.current)
+    }
+
+    private func applyShortcut() {
+        let wanted = preferences.isRecordingShortcut ? nil : preferences.openPlayerShortcut
+        guard appliedShortcut != .some(wanted) else { return }
+        appliedShortcut = .some(wanted)
+        let unavailable = !hotKey.register(wanted)
+        // Only on change: every assignment republishes and would re-enter here.
+        if preferences.shortcutUnavailable != unavailable { preferences.shortcutUnavailable = unavailable }
     }
 
     /// The session as the settings would show it: nil when its app is
@@ -216,14 +229,26 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         player.appName = appName(for: reading?.bundleIdentifier)
         player.backdrop = reading?.artwork == nil ? nil : prepared?.backdrop
         player.canControl = MediaKeys.isTrusted
+        player.shortcut = preferences.openPlayerShortcut?.displayString
     }
 
     private func togglePopover() {
         if popover.isShown {
             popover.performClose(nil)
-            return
+        } else {
+            showPopover()
         }
-        guard !capsule.isHidden else { return }
+    }
+
+    /// The global shortcut. Opens even when nothing is playing, anchored to
+    /// the note icon; with the item hidden there is nothing to anchor to.
+    private func togglePopoverFromKeyboard() {
+        guard popover.isShown || statusItem.isVisible else { return NSSound.beep() }
+        togglePopover()
+    }
+
+    private func showPopover() {
+        guard let button = statusItem.button else { return }
         syncPlayer()
         if let view = popover.contentViewController?.view {
             popover.contentSize = view.fittingSize
@@ -231,8 +256,14 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         // An accessory app has to be active for a transient popover to take
         // focus and close on outside clicks.
         NSApp.activate(ignoringOtherApps: true)
-        capsule.isPinned = true
-        popover.show(relativeTo: capsule.capsuleBounds, of: capsule, preferredEdge: .minY)
+        if capsule.isHidden {
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        } else {
+            capsule.isPinned = true
+            popover.show(relativeTo: capsule.capsuleBounds, of: capsule, preferredEdge: .minY)
+        }
+        // Key, so its keyboard shortcuts and Esc work straight away.
+        popover.contentViewController?.view.window?.makeKey()
     }
 
     func popoverDidClose(_ notification: Notification) {

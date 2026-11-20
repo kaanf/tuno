@@ -15,6 +15,8 @@ final class PlayerModel: ObservableObject {
     /// Display name of the app that owns the session, e.g. "Music".
     @Published var appName: String?
     @Published var canControl = MediaKeys.isTrusted
+    /// The global shortcut that toggles this popover, e.g. "⌥⌘P".
+    @Published var shortcut: String?
 
     var onCommand: (MediaKeys.Key) -> Void = { _ in }
     var onOpenApp: () -> Void = {}
@@ -102,7 +104,7 @@ struct PlayerView: View {
     private func controls(isPlaying: Bool) -> some View {
         HStack(spacing: 14) {
             Spacer()
-            IconButton(symbol: "backward.end.fill", label: "Previous") { model.onCommand(.previous) }
+            IconButton(symbol: "backward.end.fill", label: "Previous", key: .leftArrow) { model.onCommand(.previous) }
             Button { model.onCommand(.playPause) } label: {
                 Image(systemName: isPlaying ? "pause.fill" : "play.fill")
                     .font(.system(size: 18, weight: .semibold))
@@ -112,8 +114,9 @@ struct PlayerView: View {
                     .contentShape(Circle())
             }
             .buttonStyle(.plain)
+            .keyboardShortcut(.space, modifiers: [])
             .accessibilityLabel(isPlaying ? "Pause" : "Play")
-            IconButton(symbol: "forward.end.fill", label: "Next") { model.onCommand(.next) }
+            IconButton(symbol: "forward.end.fill", label: "Next", key: .rightArrow) { model.onCommand(.next) }
             Spacer()
         }
     }
@@ -141,6 +144,16 @@ struct PlayerView: View {
             .buttonStyle(.plain)
             .disabled(model.appName == nil)
             Spacer()
+            if let shortcut = model.shortcut {
+                Text(shortcut)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.06)))
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5))
+                    .help("Open or close this player from anywhere")
+            }
             IconButton(symbol: "gearshape", label: "Settings", size: 14, action: model.onSettings)
         }
     }
@@ -227,6 +240,8 @@ private struct IconButton: View {
     let symbol: String
     let label: String
     var size: CGFloat = 16
+    /// Unmodified key that presses this button while the popover is key.
+    var key: KeyEquivalent?
     let action: () -> Void
     @State private var hovered = false
 
@@ -239,7 +254,21 @@ private struct IconButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .modifier(KeyShortcut(key: key))
         .onHover { hovered = $0 }
         .accessibilityLabel(label)
+    }
+}
+
+/// Applies `.keyboardShortcut` only when there is a key to bind.
+private struct KeyShortcut: ViewModifier {
+    let key: KeyEquivalent?
+
+    func body(content: Content) -> some View {
+        if let key {
+            content.keyboardShortcut(key, modifiers: [])
+        } else {
+            content
+        }
     }
 }

@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import ServiceManagement
 import SwiftUI
@@ -96,6 +97,13 @@ struct SettingsView: View {
                 .padding(.vertical, 10)
             }
 
+            section("Shortcuts") {
+                row("Open player", detail: preferences.shortcutUnavailable
+                        ? "Another app uses this shortcut. Choose a different one." : nil) {
+                    ShortcutRecorder(preferences: preferences)
+                }
+            }
+
             section("System") {
                 row("Accessibility", detail: "Needed for play, pause and skip.") {
                     if trusted {
@@ -178,6 +186,64 @@ struct SettingsView: View {
                 if on { preferences.sources.insert(source) } else { preferences.sources.remove(source) }
             }
         )
+    }
+}
+
+/// Click, then press the new combination. Esc cancels; Delete clears it.
+private struct ShortcutRecorder: View {
+    @ObservedObject var preferences: Preferences
+    @State private var monitor: Any?
+
+    private var recording: Bool { preferences.isRecordingShortcut }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: { recording ? stop() : start() }) {
+                Text(recording ? "Type shortcut…" : preferences.openPlayerShortcut?.displayString ?? "Record Shortcut")
+                    .font(.system(size: 12))
+                    .frame(minWidth: 100)
+            }
+            .accessibilityLabel(recording ? "Recording shortcut" : "Open player shortcut")
+            if preferences.openPlayerShortcut != nil, !recording {
+                Button(action: { preferences.openPlayerShortcut = nil }) {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .accessibilityLabel("Clear shortcut")
+            }
+        }
+        .onDisappear(perform: stop)
+    }
+
+    private func start() {
+        // Releases the current hotkey (see StatusItemController), so pressing
+        // the same combination again is seen here instead of opening the player.
+        preferences.isRecordingShortcut = true
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            let bare = event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+            switch Int(event.keyCode) {
+            case kVK_Escape where bare:
+                stop()
+            case kVK_Delete where bare, kVK_ForwardDelete where bare:
+                preferences.openPlayerShortcut = nil
+                stop()
+            default:
+                if let shortcut = Shortcut(event: event) {
+                    preferences.openPlayerShortcut = shortcut
+                    stop()
+                } else {
+                    NSSound.beep()
+                }
+            }
+            return nil
+        }
+    }
+
+    private func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        if preferences.isRecordingShortcut { preferences.isRecordingShortcut = false }
     }
 }
 
