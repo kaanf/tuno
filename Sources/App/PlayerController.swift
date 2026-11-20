@@ -15,6 +15,11 @@ final class PlayerController {
     private let preferences: Preferences
     private let notch = NotchController()
     private lazy var settingsWindow = SettingsWindowController(preferences: preferences)
+    private lazy var onboardingWindow: OnboardingWindowController = {
+        let controller = OnboardingWindowController()
+        controller.onOpenSettings = { [weak self] in self?.showSettings() }
+        return controller
+    }()
     private lazy var hotKey = GlobalHotKey { [weak self] in self?.notch.toggleFromKeyboard() ?? () }
     private var preferencesObserver: AnyCancellable?
 
@@ -69,6 +74,10 @@ final class PlayerController {
 
     func showSettings() {
         settingsWindow.present()
+    }
+
+    func showOnboardingIfNeeded() {
+        onboardingWindow.presentIfNeeded()
     }
 
     private func applyPreferences() {
@@ -250,6 +259,10 @@ final class PlayerController {
     // MARK: - Actions
 
     private func press(_ key: MediaKeys.Key) {
+        guard MediaKeys.isTrusted else {
+            onboardingWindow.present()
+            return
+        }
         MediaKeys.press(key)
         // Most players notify right away; a slow web player gets a nudge.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in

@@ -37,7 +37,7 @@ enum MediaKeys {
     }
 
     static func press(_ key: Key) {
-        guard requestTrust() else { return }
+        guard isTrusted else { return }
         post(key, down: true)
         post(key, down: false)
     }

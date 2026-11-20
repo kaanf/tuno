@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor = NowPlayingMonitor()
         player = PlayerController(monitor: monitor)
         monitor?.start()
+        player?.showOnboardingIfNeeded()
     }
 
     /// Opening Tuno again while it runs shows Settings. With no menu bar
