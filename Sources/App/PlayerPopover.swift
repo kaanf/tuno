@@ -21,6 +21,7 @@ final class PlayerModel: ObservableObject {
     var onCopy: () -> Void = {}
     var onAllowAccessibility: () -> Void = {}
     var onQuit: () -> Void = {}
+    var onSettings: () -> Void = {}
 }
 
 struct PlayerView: View {
@@ -140,6 +141,7 @@ struct PlayerView: View {
             .buttonStyle(.plain)
             .disabled(model.appName == nil)
             Spacer()
+            IconButton(symbol: "gearshape", label: "Settings", size: 14, action: model.onSettings)
         }
     }
 }
@@ -224,13 +226,14 @@ private struct PlaybackProgress: View {
 private struct IconButton: View {
     let symbol: String
     let label: String
+    var size: CGFloat = 16
     let action: () -> Void
     @State private var hovered = false
 
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: size, weight: .semibold))
                 .frame(width: 32, height: 32)
                 .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(hovered ? 0.1 : 0)))
                 .contentShape(Rectangle())

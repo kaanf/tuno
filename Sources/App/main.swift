@@ -17,6 +17,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor?.start()
     }
 
+    /// Opening Tuno again while it runs shows Settings: the only way back
+    /// in when the menu bar item is hidden.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        statusItem?.showSettings()
+        return false
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         monitor?.stop()
     }

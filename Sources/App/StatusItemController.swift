@@ -6,6 +6,7 @@
 //
 
 import AppKit
+import Combine
 import SwiftUI
 
 /// The menu bar item: the artwork capsule while something is playing, a
@@ -14,6 +15,9 @@ import SwiftUI
 final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let monitor: NowPlayingMonitor?
+    private let preferences: Preferences
+    private var preferencesObserver: AnyCancellable?
+    private lazy var settingsWindow = SettingsWindowController(preferences: preferences)
     private let menu = NSMenu()
     private let capsule = CapsuleView(frame: NSRect(x: 0, y: 0, width: 0, height: CapsuleView.Metrics.height))
     private let player = PlayerModel()
@@ -39,14 +43,9 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     private enum Release { case menu, popover }
     private var pendingRelease: Release?
 
-    /// Widest the title may get, in points, before it is truncated.
-    var maxTitleWidth: CGFloat {
-        get { capsule.maxTitleWidth }
-        set { capsule.maxTitleWidth = newValue }
-    }
-
-    init(monitor: NowPlayingMonitor?) {
+    init(monitor: NowPlayingMonitor?, preferences: Preferences = .shared) {
         self.monitor = monitor
+        self.preferences = preferences
         super.init()
         menu.delegate = self
         // Clicks are taken before the status bar button sees them: no
@@ -65,7 +64,11 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         capsule.onControl = { [weak self] key in self?.press(key) }
         statusItem.button?.addSubview(capsule)
         setUpPopover()
-        render(nil)
+        applyPreferences()
+        // objectWillChange fires before the new value is stored; read it a beat later.
+        preferencesObserver = preferences.objectWillChange.sink { [weak self] in
+            DispatchQueue.main.async { self?.applyPreferences() }
+        }
 
         monitor?.onChange = { [weak self] reading in self?.render(reading) }
         if monitor == nil {
@@ -73,14 +76,37 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
     }
 
+    func showSettings() {
+        if popover.isShown { popover.performClose(nil) }
+        settingsWindow.present()
+    }
+
+    private func applyPreferences() {
+        capsule.display = preferences.display
+        capsule.maxTitleWidth = CGFloat(preferences.maxTitleWidth)
+        capsule.scrollsLongTitles = preferences.scrollLongTitles
+        capsule.showsProgress = preferences.showProgress
+        render(monitor?.current)
+    }
+
+    /// The session as the settings would show it: nil when its app is
+    /// filtered out, or when it's paused and paused sessions are hidden.
+    private func visible(_ reading: NowPlaying?) -> NowPlaying? {
+        guard let reading, preferences.allows(bundleIdentifier: reading.bundleIdentifier) else { return nil }
+        if !reading.isPlaying, !preferences.showWhenPaused { return nil }
+        return reading
+    }
+
     // MARK: - Rendering
 
-    private func render(_ reading: NowPlaying?) {
+    private func render(_ session: NowPlaying?) {
         guard let button = statusItem.button else { return }
         defer { if popover.isShown { syncPlayer() } }
+        let reading = visible(session)
         guard let reading, let artwork = artwork(for: reading) else {
             // The popover is anchored to the capsule; it can't outlive it.
             if popover.isShown { popover.performClose(nil) }
+            statusItem.isVisible = !preferences.hideWhenIdle
             capsule.isHidden = true
             statusItem.length = NSStatusItem.variableLength
             button.image = NSImage(systemSymbolName: "music.note", accessibilityDescription: "Tuno")
@@ -89,10 +115,15 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
             return
         }
 
+        statusItem.isVisible = true
         button.image = nil
         button.title = ""
-        capsule.show(.init(title: reading.title, isPlaying: reading.isPlaying,
+        let subtitle = [reading.artist, reading.album].compactMap { $0 }.first { !$0.isEmpty }
+        capsule.show(.init(title: reading.title, subtitle: subtitle, isPlaying: reading.isPlaying,
                            artwork: artwork.image, pausedArtwork: artwork.paused, tint: artwork.tint))
+        let position = reading.position()
+        capsule.setProgress(reading.progress(), remaining: reading.duration.flatMap { d in position.map { d - $0 } },
+                            rate: reading.rate, playing: reading.isPlaying)
         capsule.isHidden = false
         button.setAccessibilityLabel([reading.title, reading.artist].compactMap { $0 }.joined(separator: ", "))
         fitCapsule()
@@ -169,6 +200,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
             MediaKeys.openAccessibilitySettings()
         }
         player.onQuit = { NSApp.terminate(nil) }
+        player.onSettings = { [weak self] in self?.showSettings() }
 
         popover.behavior = .transient
         popover.animates = true
@@ -179,7 +211,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     /// Brings the popover's model up to date. Done only while the popover is
     /// open (and just before it opens), so a closed popover costs nothing.
     private func syncPlayer() {
-        let reading = monitor?.current
+        let reading = visible(monitor?.current)
         player.reading = reading
         player.appName = appName(for: reading?.bundleIdentifier)
         player.backdrop = reading?.artwork == nil ? nil : prepared?.backdrop
@@ -246,6 +278,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
         }
 
         menu.addItem(.separator())
+        addItem(to: menu, "Settings…", #selector(openSettings), key: ",")
         addItem(to: menu, "Quit Tuno", #selector(quit), key: "q")
     }
 
@@ -320,6 +353,7 @@ final class StatusItemController: NSObject, NSMenuDelegate, NSPopoverDelegate {
     @objc private func nextTrack() { press(.next) }
     @objc private func previousTrack() { press(.previous) }
     @objc private func openAccessibility() { MediaKeys.openAccessibilitySettings() }
+    @objc private func openSettings() { showSettings() }
     @objc private func quit() { NSApp.terminate(nil) }
 
     private func press(_ key: MediaKeys.Key) {

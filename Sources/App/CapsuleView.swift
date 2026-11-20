@@ -9,21 +9,24 @@ import AppKit
 import QuartzCore
 
 /// The menu bar capsule: artwork, title and a waveform tinted from the
-/// artwork. Hovering swaps the waveform for inline playback controls; a
-/// track change scrolls a long title once before it truncates.
+/// artwork. Hovering swaps the waveform for inline playback controls; a long
+/// title scrolls in a loop. Optionally shows the artist on a second line and
+/// a progress line along the bottom.
 ///
 /// The view never takes clicks itself; StatusItemController routes them with
 /// `zone(atScreen:)`.
 final class CapsuleView: NSView {
     struct Content: Equatable {
         var title: String
+        /// Shown under the title in the two-line display.
+        var subtitle: String?
         var isPlaying: Bool
         var artwork: NSImage
         var pausedArtwork: NSImage
         var tint: Tint
 
         static func == (a: Content, b: Content) -> Bool {
-            a.title == b.title && a.isPlaying == b.isPlaying && a.artwork === b.artwork
+            a.title == b.title && a.subtitle == b.subtitle && a.isPlaying == b.isPlaying && a.artwork === b.artwork
         }
     }
 
@@ -44,6 +47,9 @@ final class CapsuleView: NSView {
         static let marqueeGap: CGFloat = 32
         static let marqueeSpeed: CGFloat = 30
         static let marqueeHold: CFTimeInterval = 1.5
+        /// Inset of the progress line from the capsule's sides and bottom.
+        static let progressInset = CGPoint(x: 9, y: 1.5)
+        static let progressHeight: CGFloat = 1.5
     }
 
     /// Called whenever the capsule's width changes.
@@ -64,7 +70,23 @@ final class CapsuleView: NSView {
     }
 
     var maxTitleWidth: CGFloat = 150 {
-        didSet { if maxTitleWidth != oldValue { relayout() } }
+        didSet { if maxTitleWidth != oldValue { restyle() } }
+    }
+
+    var display: Preferences.Display = .iconAndTitle {
+        didSet { if display != oldValue { restyle() } }
+    }
+
+    /// Whether a title too long for the capsule scrolls; otherwise it truncates.
+    var scrollsLongTitles = true {
+        didSet { if scrollsLongTitles != oldValue { updateMarquee() } }
+    }
+
+    var showsProgress = false {
+        didSet {
+            guard showsProgress != oldValue else { return }
+            progressTrack.isHidden = !showsProgress
+        }
     }
 
     private(set) var content: Content?
@@ -91,14 +113,25 @@ final class CapsuleView: NSView {
     /// Second copy of the title, trailing the first while it scrolls, so the
     /// loop comes back around seamlessly.
     private let titleEcho = CATextLayer()
+    private let subtitleLayer = CATextLayer()
     private let fadeMask = CAGradientLayer()
+    private let progressTrack = CALayer()
+    private let progressFill = CALayer()
     private let waveLayer = CALayer()
     private let bars = (0..<4).map { _ in CALayer() }
     private let controls = NSStackView()
     private let playPauseButton = NSButton()
 
     private var titleFont: NSFont {
-        .systemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .medium)
+        display == .twoLine
+            ? .systemFont(ofSize: 10.5, weight: .semibold)
+            : .systemFont(ofSize: NSFont.menuBarFont(ofSize: 0).pointSize, weight: .medium)
+    }
+
+    private let subtitleFont = NSFont.systemFont(ofSize: 9.5)
+
+    private func lineHeight(_ font: NSFont) -> CGFloat {
+        ceil(font.ascender - font.descender + font.leading)
     }
 
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
@@ -123,6 +156,7 @@ final class CapsuleView: NSView {
 
         titleLayer.string = new.title
         titleEcho.string = new.title
+        subtitleLayer.string = new.subtitle ?? ""
         playPauseButton.image = Self.symbol(new.isPlaying ? "pause.fill" : "play.fill")
         playPauseButton.setAccessibilityLabel(new.isPlaying ? "Pause" : "Play")
         setAccessibilityLabel("Now playing: \(new.title)")
@@ -136,19 +170,38 @@ final class CapsuleView: NSView {
 
     // MARK: - Layout
 
-    private var textWidth: CGFloat {
-        guard let title = content?.title else { return 0 }
-        return ceil((title as NSString).size(withAttributes: [.font: titleFont]).width)
+    private func measure(_ text: String?, _ font: NSFont) -> CGFloat {
+        guard let text, !text.isEmpty else { return 0 }
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
     }
 
-    private var titleWidth: CGFloat { min(textWidth, maxTitleWidth) }
+    /// Full width of the title in its current font; what the marquee scrolls.
+    private var textWidth: CGFloat { measure(content?.title, titleFont) }
+
+    /// Room the text block takes: nothing for the icon display, and the
+    /// wider of title and artist for two lines, capped at `maxTitleWidth`.
+    private var titleWidth: CGFloat {
+        switch display {
+        case .icon: return 0
+        case .iconAndTitle: return min(textWidth, maxTitleWidth)
+        case .twoLine: return min(max(textWidth, measure(content?.subtitle, subtitleFont)), maxTitleWidth)
+        }
+    }
 
     /// Width of the visible capsule: hugs the title up to `maxTitleWidth`,
     /// and while hovering grows by the room the controls need, so the title
     /// never gives way to them.
     private func width(hovering: Bool) -> CGFloat {
         let trailing = hovering ? Metrics.controls : Metrics.wave.width
-        return ceil(Metrics.leading + Metrics.artwork + Metrics.gap + titleWidth + Metrics.gap + trailing + Metrics.trailing)
+        let text = titleWidth > 0 ? titleWidth + Metrics.gap : 0
+        return ceil(Metrics.leading + Metrics.artwork + Metrics.gap + text + trailing + Metrics.trailing)
+    }
+
+    /// Re-applies fonts and sizes after a display setting changes.
+    private func restyle() {
+        stopMarquee()
+        relayout()
+        updateMarquee()
     }
 
     /// The visible capsule inside the view. The view always spans
@@ -177,7 +230,11 @@ final class CapsuleView: NSView {
         let generation = layoutGeneration
         let animate = animated && !reduceMotion
         let capsule = capsuleBounds
-        let lineHeight = ceil(titleFont.ascender - titleFont.descender + titleFont.leading)
+        let titleLine = lineHeight(titleFont)
+        let twoLine = display == .twoLine
+        // Two lines share the capsule's full height, title on top.
+        let clipHeight = twoLine ? Metrics.height : titleLine
+        let titleY = twoLine ? Metrics.height - titleLine : 0
 
         CATransaction.begin()
         if animate {
@@ -194,19 +251,32 @@ final class CapsuleView: NSView {
         background.frame = capsule
         artworkLayer.frame = CGRect(x: capsule.minX + Metrics.leading, y: (Metrics.height - Metrics.artwork) / 2,
                                     width: Metrics.artwork, height: Metrics.artwork)
-        titleClip.frame = CGRect(x: artworkLayer.frame.maxX + Metrics.gap, y: (Metrics.height - lineHeight) / 2,
-                                 width: titleWidth, height: lineHeight)
+        titleClip.frame = CGRect(x: artworkLayer.frame.maxX + Metrics.gap, y: (Metrics.height - clipHeight) / 2,
+                                 width: titleWidth, height: clipHeight)
+        // Two lines of text leave no room above the capsule's bottom edge, so
+        // the line sits lower and thinner there.
+        let progressY = twoLine ? 0.5 : Metrics.progressInset.y
+        let progressHeight = twoLine ? 1 : Metrics.progressHeight
+        progressTrack.frame = CGRect(x: capsule.minX + Metrics.progressInset.x, y: progressY,
+                                     width: capsule.width - Metrics.progressInset.x * 2, height: progressHeight)
+        progressTrack.cornerRadius = progressHeight / 2
+        progressFill.frame = progressTrack.bounds
         CATransaction.commit()
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        titleClip.isHidden = display == .icon
         if !marqueeRunning {
-            titleLayer.frame = CGRect(x: 0, y: 0, width: titleWidth, height: lineHeight)
+            titleLayer.frame = CGRect(x: 0, y: titleY, width: titleWidth, height: titleLine)
         }
         for layer in [titleLayer, titleEcho] {
             layer.font = titleFont
             layer.fontSize = titleFont.pointSize
         }
+        subtitleLayer.isHidden = !twoLine
+        subtitleLayer.font = subtitleFont
+        subtitleLayer.fontSize = subtitleFont.pointSize
+        subtitleLayer.frame = CGRect(x: 0, y: 0, width: titleWidth, height: lineHeight(subtitleFont))
         waveLayer.frame = CGRect(x: bounds.width - Metrics.trailing - Metrics.wave.width,
                                  y: (Metrics.height - Metrics.wave.height) / 2,
                                  width: Metrics.wave.width, height: Metrics.wave.height)
@@ -229,7 +299,8 @@ final class CapsuleView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         let scale = window?.backingScaleFactor ?? 2
-        [background, artworkLayer, titleClip, titleLayer, titleEcho, waveLayer].forEach { $0.contentsScale = scale }
+        [background, artworkLayer, titleClip, titleLayer, titleEcho, subtitleLayer, waveLayer, progressTrack, progressFill]
+            .forEach { $0.contentsScale = scale }
         bars.forEach { $0.contentsScale = scale }
     }
 
@@ -244,8 +315,11 @@ final class CapsuleView: NSView {
             background.borderColor = chip.withAlphaComponent(dark ? 0.08 : 0.06).cgColor
             titleLayer.foregroundColor = (content.isPlaying ? NSColor.labelColor : NSColor.secondaryLabelColor).cgColor
             titleEcho.foregroundColor = titleLayer.foregroundColor
+            subtitleLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
             let barColor = content.isPlaying ? content.tint.color(onDark: dark) : NSColor.secondaryLabelColor
             bars.forEach { $0.backgroundColor = barColor.cgColor }
+            progressTrack.backgroundColor = chip.withAlphaComponent(dark ? 0.16 : 0.10).cgColor
+            progressFill.backgroundColor = barColor.cgColor
             for (index, view) in controls.arrangedSubviews.enumerated() {
                 // The control under the pointer turns white; the rest keep the usual colour.
                 // Resolved here rather than left dynamic: buttons in the status bar
@@ -295,6 +369,31 @@ final class CapsuleView: NSView {
         CATransaction.commit()
     }
 
+    // MARK: - Progress
+
+    /// Sets the progress line from a playback sample. While playing, Core
+    /// Animation runs it to the end on its own, so it needs no ticks from here;
+    /// the next sample (seek, pause, track change) simply replaces it.
+    func setProgress(_ fraction: Double?, remaining: TimeInterval?, rate: Double, playing: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        progressFill.removeAnimation(forKey: "progress")
+        let start = CGFloat(min(max(fraction ?? 0, 0), 1))
+        progressFill.transform = CATransform3DMakeScale(start, 1, 1)
+        progressTrack.isHidden = !showsProgress || fraction == nil
+        CATransaction.commit()
+
+        guard playing, rate > 0, let remaining, remaining > 0 else { return }
+        let run = CABasicAnimation(keyPath: "transform.scale.x")
+        run.fromValue = start
+        run.toValue = 1
+        run.duration = remaining / rate
+        run.timingFunction = CAMediaTimingFunction(name: .linear)
+        run.fillMode = .forwards
+        run.isRemovedOnCompletion = false
+        progressFill.add(run, forKey: "progress")
+    }
+
     // MARK: - Marquee
 
     /// A title too long for the capsule scrolls in a loop while playing:
@@ -302,7 +401,8 @@ final class CapsuleView: NSView {
     /// and rests again. Hovering, pausing or Reduce Motion show it truncated.
     private func updateMarquee() {
         let overflows = textWidth > titleClip.bounds.width + 1
-        let wanted = overflows && !hovering && content?.isPlaying == true && !reduceMotion
+        let wanted = overflows && scrollsLongTitles && display != .icon && !hovering
+            && content?.isPlaying == true && !reduceMotion
         if wanted, !marqueeRunning {
             startMarquee()
         } else if !wanted, marqueeRunning {
@@ -313,13 +413,13 @@ final class CapsuleView: NSView {
     private func startMarquee() {
         marqueeRunning = true
         let visible = titleClip.bounds.width
-        let height = titleClip.bounds.height
+        let line = titleLayer.frame
         let distance = textWidth + Metrics.marqueeGap
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        titleLayer.frame = CGRect(x: 0, y: 0, width: textWidth, height: height)
-        titleEcho.frame = CGRect(x: distance, y: 0, width: textWidth, height: height)
+        titleLayer.frame = CGRect(x: 0, y: line.minY, width: textWidth, height: line.height)
+        titleEcho.frame = CGRect(x: distance, y: 0, width: textWidth, height: line.height)
         titleEcho.isHidden = false
         fadeMask.frame = titleClip.bounds
         titleClip.mask = fadeMask
@@ -496,7 +596,20 @@ final class CapsuleView: NSView {
         titleEcho.isHidden = true
         titleLayer.addSublayer(titleEcho)
         titleClip.addSublayer(titleLayer)
+        subtitleLayer.truncationMode = .end
+        subtitleLayer.isWrapped = false
+        subtitleLayer.alignmentMode = .left
+        subtitleLayer.actions = still
+        subtitleLayer.isHidden = true
+        titleClip.addSublayer(subtitleLayer)
         root.addSublayer(titleClip)
+
+        progressTrack.cornerRadius = Metrics.progressHeight / 2
+        progressTrack.masksToBounds = true
+        progressTrack.isHidden = true
+        progressFill.anchorPoint = CGPoint(x: 0, y: 0.5)
+        progressTrack.addSublayer(progressFill)
+        root.addSublayer(progressTrack)
 
         fadeMask.startPoint = CGPoint(x: 0, y: 0.5)
         fadeMask.endPoint = CGPoint(x: 1, y: 0.5)
