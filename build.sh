@@ -1,9 +1,11 @@
 #!/bin/bash
 # Builds build/Tuno.app.
 #
-#   ./build.sh                     sign with Kaan Firat's Apple Development certificate
+#   ./build.sh                     sign with Kaan Firat's Developer ID certificate
 #   IDENTITY="…" ./build.sh        sign with another certificate
 #   IDENTITY=- ./build.sh          ad-hoc signing
+#
+# For a notarized release, use scripts/release.sh instead.
 #
 # A stable signing identity matters: macOS ties the Accessibility grant to it,
 # so ad-hoc builds lose the permission on every rebuild.
@@ -12,7 +14,7 @@ cd "$(dirname "$0")"
 
 APP="build/Tuno.app"
 CONTENTS="$APP/Contents"
-IDENTITY="${IDENTITY:-Apple Development: Kaan Firat (9CHA477JUU)}"
+IDENTITY="${IDENTITY:-Developer ID Application: Kaan Firat (SGWP227GBQ)}"
 MIN_MACOS="12.0"
 
 rm -rf build
@@ -56,9 +58,16 @@ if [[ "$IDENTITY" != "-" ]] && ! security find-identity -v -p codesigning | grep
     IDENTITY="-"
 fi
 
+# Notarization needs the hardened runtime and a secure timestamp, which only
+# make sense for a Developer ID build.
+SIGN_FLAGS=(--force --sign "$IDENTITY")
+if [[ "$IDENTITY" == "Developer ID Application:"* ]]; then
+    SIGN_FLAGS+=(--options runtime --timestamp)
+fi
+
 echo "→ codesign ($IDENTITY)"
 xattr -cr "$APP"
-codesign --force --sign "$IDENTITY" "$CONTENTS/Resources/TunoBridge.dylib"
-codesign --force --sign "$IDENTITY" "$APP"
+codesign "${SIGN_FLAGS[@]}" "$CONTENTS/Resources/TunoBridge.dylib"
+codesign "${SIGN_FLAGS[@]}" --entitlements Resources/Tuno.entitlements "$APP"
 
 echo "Built $APP — run with: open $APP"
