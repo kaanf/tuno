@@ -16,13 +16,21 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let capsule = CapsuleView(frame: NSRect(x: 0, y: 0, width: 0, height: CapsuleView.Metrics.height))
 
-    /// Space between the capsule and the edges of the status item.
-    private let inset: CGFloat = 2
 
     // Artwork is decoded once per image; the monitor hands out a new NSImage
     // only when the bytes change, so identity is a cheap change check.
     private var preparedSource: NSImage?
     private var prepared: Artwork?
+
+    /// A track change often arrives a moment before its artwork. Keep the
+    /// previous artwork that long instead of flashing the app icon.
+    private let artworkGrace: TimeInterval = 2
+    private var trackArtworkApp: String?
+    private var artworkGraceEnds: Date?
+
+    private var mouseMonitor: Any?
+    /// A press that should open the menu once the button is released.
+    private var menuOnRelease = false
 
     /// Widest the title may get, in points, before it is truncated.
     var maxTitleWidth: CGFloat {
@@ -34,10 +42,19 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         self.monitor = monitor
         super.init()
         menu.delegate = self
-        statusItem.menu = menu
+        // Clicks are taken before the status bar button sees them: no
+        // `statusItem.menu` (it would open on any click, controls included),
+        // and no button highlight on press.
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .leftMouseUp, .rightMouseUp]) { [weak self] event in
+            guard let self else { return event }
+            let handled = event.type == .leftMouseDown || event.type == .rightMouseDown
+                ? self.handleMouseDown(event)
+                : self.handleMouseUp()
+            return handled ? nil : event
+        }
 
         capsule.isHidden = true
-        capsule.onResize = { [weak self] _ in self?.fitCapsule() }
+        capsule.onResize = { [weak self] in self?.fitCapsule() }
         capsule.onControl = { [weak self] key in self?.press(key) }
         statusItem.button?.addSubview(capsule)
         render(nil)
@@ -72,13 +89,31 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func fitCapsule() {
         guard !capsule.isHidden, let button = statusItem.button else { return }
-        statusItem.length = capsule.preferredWidth + inset * 2
+        let length = capsule.reservedWidth
+        if statusItem.length != length { statusItem.length = length }
+        // Pinned to the right edge, so hovering grows it toward the left
+        // inside the room the item already has.
         let y = floor((button.bounds.height - CapsuleView.Metrics.height) / 2)
-        capsule.setFrameOrigin(NSPoint(x: inset, y: y))
+        capsule.setFrameOrigin(NSPoint(x: length - capsule.frame.width, y: y))
     }
 
     /// Track artwork, or the player app's icon when the track has none.
     private func artwork(for reading: NowPlaying) -> Artwork? {
+        if reading.artwork != nil {
+            trackArtworkApp = reading.bundleIdentifier
+            artworkGraceEnds = nil
+        } else if let prepared, trackArtworkApp != nil, trackArtworkApp == reading.bundleIdentifier {
+            let now = Date()
+            if artworkGraceEnds == nil {
+                artworkGraceEnds = now.addingTimeInterval(artworkGrace)
+                DispatchQueue.main.asyncAfter(deadline: .now() + artworkGrace + 0.05) { [weak self] in
+                    self?.render(self?.monitor?.current)
+                }
+            }
+            if let ends = artworkGraceEnds, now < ends { return prepared }
+            trackArtworkApp = nil
+        }
+
         let source = reading.artwork ?? appIcon(for: reading.bundleIdentifier)
         guard let source else { return nil }
         if source !== preparedSource {
@@ -134,6 +169,50 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
         item.target = self
         menu.addItem(item)
+    }
+
+    /// Routes a click on the status item. Returns false for clicks elsewhere,
+    /// which go on as usual.
+    private func handleMouseDown(_ event: NSEvent) -> Bool {
+        let location = NSEvent.mouseLocation
+        guard let button = statusItem.button, let window = button.window,
+              window.convertToScreen(button.convert(button.bounds, to: nil)).contains(location) else { return false }
+
+        if !capsule.isHidden {
+            // The room left of a resting capsule is reserved for hover, not a target.
+            guard let frame = capsule.screenFrame, frame.contains(location) else { return true }
+        }
+        if event.type == .leftMouseDown, !capsule.isHidden {
+            switch capsule.zone(atScreen: location) {
+            case .title:
+                break
+            case .control(let key):
+                press(key)
+                return true
+            case .none:
+                return true
+            }
+        }
+        // macOS highlights a menu bar item when a menu starts tracking while
+        // the button is down, so wait for the release.
+        menuOnRelease = true
+        return true
+    }
+
+    private func handleMouseUp() -> Bool {
+        guard menuOnRelease else { return false }
+        menuOnRelease = false
+        // Open after the event is consumed: popUp runs its own tracking loop.
+        DispatchQueue.main.async { [weak self] in self?.showMenu() }
+        return true
+    }
+
+    /// Opens the menu under the item at a screen position. Not anchored to
+    /// the status bar button, which would highlight while the menu is open.
+    private func showMenu() {
+        guard let button = statusItem.button, let window = button.window else { return }
+        let left = capsule.screenFrame?.minX ?? window.frame.minX
+        menu.popUp(positioning: nil, at: NSPoint(x: left, y: window.frame.minY - 4), in: nil)
     }
 
     @objc private func playPause() { press(.playPause) }
