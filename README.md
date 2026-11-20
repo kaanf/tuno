@@ -18,9 +18,19 @@ works with apple music, spotify, and anything playing in your browser (youtube, 
 - ⌥⌘P opens and closes it from anywhere. you can change the shortcut in settings
 - no notch? it draws one at the top of your screen
 
+## installing
+
+grab `Tuno-x.y.z.zip` from the [releases page](https://github.com/kaanf/tuno/releases), unzip it and drag tuno into applications. it runs on apple silicon macs with macos 12 or later.
+
+the app isn't notarized yet, so the first time you open it macos will say it can't check it for malware. go to system settings › privacy & security and click open anyway, or run:
+
+```sh
+xattr -dr com.apple.quarantine /Applications/Tuno.app
+```
+
 ## building
 
-there's no release yet, so for now you build it yourself:
+if you'd rather build it yourself:
 
 ```sh
 ./build.sh
