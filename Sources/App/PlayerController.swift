@@ -115,7 +115,8 @@ final class PlayerController {
     }
 
     func showOnboardingIfNeeded() {
-        onboardingWindow.presentIfNeeded()
+        guard OnboardingWindowController.isNeededAtLaunch else { return }
+        onboardingWindow.present()
     }
 
     #if DEBUG

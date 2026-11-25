@@ -49,10 +49,10 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// On launch: only when permission is missing and the user hasn't said
-    /// "Not now" before.
-    func presentIfNeeded() {
-        guard !MediaKeys.isTrusted, !UserDefaults.standard.bool(forKey: Self.dismissedKey) else { return }
-        present()
+    /// "Not now" before. Checked before making a controller, since the
+    /// window costs a few megabytes to build.
+    static var isNeededAtLaunch: Bool {
+        !MediaKeys.isTrusted && !UserDefaults.standard.bool(forKey: dismissedKey)
     }
 
     func present() {
