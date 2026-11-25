@@ -29,7 +29,7 @@ if you'd rather build it yourself:
 open build/Tuno.app
 ```
 
-for now the build expects [notchkit](https://github.com/kaanf/NotchKit) checked out next to this repo, as `../NotchKit`.
+for now the build expects [notchkit](https://github.com/kaanf/notch-kit) checked out next to this repo, as `../NotchKit`.
 
 you need macos 14 or later and the xcode command line tools. the liquid glass icon needs xcode 26, without it you get the regular icon.
 
@@ -70,6 +70,10 @@ Resources/Icon/                        icon sources (svg + icon composer)
 ## privacy
 
 everything stays on your mac. no accounts, no analytics, no network requests.
+
+## license
+
+mit, see [LICENSE](LICENSE).
 
 ---
 
