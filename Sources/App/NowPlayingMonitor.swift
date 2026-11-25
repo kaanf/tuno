@@ -18,6 +18,11 @@ final class NowPlayingMonitor {
 
     private(set) var current: NowPlaying?
 
+    #if DEBUG
+    /// Set before `start()` to read from the mock instead of the bridge.
+    var mock: MockPlayer?
+    #endif
+
     private let loaderURL: URL
     private let bridgeURL: URL
 
@@ -42,6 +47,14 @@ final class NowPlayingMonitor {
     func start() {
         guard !running else { return }
         running = true
+        #if DEBUG
+        if let mock {
+            return mock.start { [weak self] reading in
+                self?.current = reading
+                self?.onChange?(reading)
+            }
+        }
+        #endif
         launch()
     }
 
@@ -54,6 +67,9 @@ final class NowPlayingMonitor {
 
     /// Ask for a fresh reading now instead of waiting for the next change.
     func refresh() {
+        #if DEBUG
+        if let mock { return mock.redeliver() }
+        #endif
         // Throws rather than crashing if the bridge has just exited, because
         // SIGPIPE is ignored (see main.swift).
         try? requests?.write(contentsOf: Data("refresh\n".utf8))

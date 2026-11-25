@@ -4,6 +4,8 @@
 #   ./build.sh                     sign with Kaan Firat's Developer ID certificate
 #   IDENTITY="…" ./build.sh        sign with another certificate
 #   IDENTITY=- ./build.sh          ad-hoc signing
+#   CONFIGURATION=debug ./build.sh a debug build, with the mock player:
+#                                  open build/Tuno.app --args --mock-player
 #
 # For a notarized release, use scripts/release.sh instead.
 #
@@ -16,6 +18,12 @@ APP="build/Tuno.app"
 CONTENTS="$APP/Contents"
 IDENTITY="${IDENTITY:-Developer ID Application: Kaan Firat (SGWP227GBQ)}"
 MIN_MACOS="12.0"
+CONFIGURATION="${CONFIGURATION:-release}"
+if [[ "$CONFIGURATION" == "debug" ]]; then
+    SWIFT_FLAGS=(-Onone -D DEBUG)
+else
+    SWIFT_FLAGS=(-O)
+fi
 
 rm -rf build
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
@@ -28,7 +36,7 @@ clang -dynamiclib -fobjc-arc -fvisibility=hidden -O2 -Wall \
     Sources/Bridge/TunoBridge.m
 
 echo "→ Tuno"
-swiftc -O \
+swiftc "${SWIFT_FLAGS[@]}" \
     -target "$(uname -m)-apple-macos$MIN_MACOS" \
     -framework AppKit \
     -o "$CONTENTS/MacOS/Tuno" \

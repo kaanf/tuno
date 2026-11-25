@@ -80,6 +80,17 @@ final class PlayerController {
         onboardingWindow.presentIfNeeded()
     }
 
+    #if DEBUG
+    /// Lists the mock's scenarios, and a peek, in the notch's right-click menu.
+    func addDebugActions(for mock: MockPlayer) {
+        var actions = MockPlayer.Scenario.allCases.map { scenario in
+            (title: "Mock: \(scenario.label)", action: { mock.play(scenario) })
+        }
+        actions.append((title: "Mock: Peek", action: { [weak self] in self?.notch.peek() }))
+        notch.model.debugActions = actions
+    }
+    #endif
+
     private func applyPreferences() {
         applyShortcut()
         render(monitor?.current)

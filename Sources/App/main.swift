@@ -14,6 +14,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         monitor = NowPlayingMonitor()
         player = PlayerController(monitor: monitor)
+        #if DEBUG
+        if let mock = MockPlayer() {
+            monitor?.mock = mock
+            MediaKeys.mock = mock
+            player?.addDebugActions(for: mock)
+        }
+        #endif
         monitor?.start()
         player?.showOnboardingIfNeeded()
     }

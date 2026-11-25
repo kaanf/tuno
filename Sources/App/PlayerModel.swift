@@ -31,6 +31,11 @@ final class PlayerModel: ObservableObject {
     var onOpenApp: () -> Void = {}
     var onSettings: () -> Void = {}
     var onQuit: () -> Void = {}
+
+    #if DEBUG
+    /// Extra items for the notch's right-click menu while mocking.
+    var debugActions: [(title: String, action: () -> Void)] = []
+    #endif
 }
 
 enum TimeText {

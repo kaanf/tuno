@@ -533,6 +533,14 @@ private struct NotchView: View {
         .contextMenu {
             Button("Settings…", action: model.onSettings)
             Button("Quit Tuno", action: model.onQuit)
+            #if DEBUG
+            if !model.debugActions.isEmpty {
+                Divider()
+                ForEach(model.debugActions.indices, id: \.self) { index in
+                    Button(model.debugActions[index].title, action: model.debugActions[index].action)
+                }
+            }
+            #endif
         }
     }
 

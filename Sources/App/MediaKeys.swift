@@ -21,6 +21,11 @@ enum MediaKeys {
         case previous = 18
     }
 
+    #if DEBUG
+    /// Set to send key presses to the mock player instead of the system.
+    static var mock: MockPlayer?
+    #endif
+
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
     /// Shows the system Accessibility prompt if permission hasn't been given.
@@ -37,6 +42,9 @@ enum MediaKeys {
     }
 
     static func press(_ key: Key) {
+        #if DEBUG
+        if let mock { return mock.press(key) }
+        #endif
         guard isTrusted else { return }
         post(key, down: true)
         post(key, down: false)
