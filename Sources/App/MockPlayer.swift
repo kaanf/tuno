@@ -11,11 +11,12 @@ import AppKit
 /// A stand-in for the system Now Playing session, for looking at the notch
 /// without touching a real player. Debug builds only:
 ///
-///     Tuno --mock-player [scenario] [--mock-change-after <seconds>]
+///     Tuno --mock-player [scenario] [--mock-change-after <seconds>] [--mock-clearance none|room]
 ///
 /// The scenario is one of `MockPlayer.Scenario`; the second argument moves
-/// on to the next scenario once, after a delay, as a track change would.
-/// The notch's right-click menu lists the scenarios and a peek.
+/// on to the next scenario once, after a delay, as a track change would;
+/// the third pretends the menu bar has no room, or plenty, for the wings.
+/// The notch's right-click menu lists all of these and a peek.
 final class MockPlayer {
     enum Scenario: String, CaseIterable {
         case normal
@@ -63,6 +64,8 @@ final class MockPlayer {
 
     private(set) var scenario: Scenario
     private let changeAfter: TimeInterval?
+    /// From `--mock-clearance`; nil leaves the measured clearance alone.
+    let roomForWings: Bool?
     private var reading: NowPlaying
     private var deliver: ((NowPlaying?) -> Void)?
 
@@ -76,6 +79,11 @@ final class MockPlayer {
             changeAfter = TimeInterval(arguments[after + 1])
         } else {
             changeAfter = nil
+        }
+        if let flag = arguments.firstIndex(of: "--mock-clearance"), arguments.indices.contains(flag + 1) {
+            roomForWings = arguments[flag + 1] == "room"
+        } else {
+            roomForWings = nil
         }
     }
 

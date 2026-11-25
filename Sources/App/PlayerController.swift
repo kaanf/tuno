@@ -7,7 +7,11 @@
 
 import AppKit
 import Combine
+#if DEBUG
+@_spi(Testing) import NotchKit
+#else
 import NotchKit
+#endif
 
 /// Connects the Now Playing stream to the notch: applies the user's filters,
 /// prepares artwork and tint, and handles the global shortcut and Settings.
@@ -45,6 +49,8 @@ final class PlayerController {
 
     /// How long a sneak peek stays up.
     private let peekDuration: TimeInterval = 2.8
+    /// How long a new track brings the wings out when there's no room for them.
+    private let wingsDuration: TimeInterval = 2.5
     /// Identifies the current track, to notice changes worth a sneak peek.
     private var trackKey: String?
     private let scripting = PlayerScripting.shared
@@ -66,6 +72,8 @@ final class PlayerController {
             CompactArtwork(model: model)
         } compactTrailing: {
             CompactWaveform(model: model)
+        } compactLine: {
+            ProgressLine(model: model)
         } expanded: {
             PlayerPanel(model: model)
         } peek: {
@@ -117,7 +125,16 @@ final class PlayerController {
             (title: "Mock: \(scenario.label)", action: { mock.play(scenario) })
         }
         actions.append((title: "Mock: Peek", action: { [weak self] in self?.notch.peek(for: self?.peekDuration ?? 0) }))
+        actions.append((title: "Mock: No room for wings", action: { [weak self] in self?.overrideClearance(room: false) }))
+        actions.append((title: "Mock: Room for wings", action: { [weak self] in self?.overrideClearance(room: true) }))
+        actions.append((title: "Mock: Measured clearance", action: { [weak self] in self?.overrideClearance(room: nil) }))
         model.debugActions = actions
+        if let room = mock.roomForWings { overrideClearance(room: room) }
+    }
+
+    /// Pretends the menu bar is full or empty; nil goes back to measuring.
+    private func overrideClearance(room: Bool?) {
+        notch.clearanceOverride = room.map { NotchClearance(leading: $0 ? 500 : 0, trailing: $0 ? 500 : 0) }
     }
     #endif
 
@@ -173,7 +190,11 @@ final class PlayerController {
             trackKey = key
             // Favourite belongs to the track; a pending change was for the old one.
             pendingState = nil
-            if changed, reading.isPlaying { notch.peek(for: peekDuration) }
+            if changed, reading.isPlaying {
+                // Without room for the wings the peek ends with them.
+                notch.showWings(for: wingsDuration)
+                notch.peek(for: peekDuration)
+            }
             // Favourite is per track.
             if notch.isExpanded { refreshScriptState() }
         }
