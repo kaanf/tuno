@@ -29,6 +29,8 @@ if you'd rather build it yourself:
 open build/Tuno.app
 ```
 
+for now the build expects [notchkit](https://github.com/kaanf/NotchKit) checked out next to this repo, as `../NotchKit`.
+
 you need macos 14 or later and the xcode command line tools. the liquid glass icon needs xcode 26, without it you get the regular icon.
 
 the build signs with my developer certificate when it's on the machine, and falls back to ad-hoc signing otherwise. to use your own, run `IDENTITY="your cert name" ./build.sh`. with ad-hoc signing macos forgets the accessibility permission every time you rebuild, which gets old fast.
