@@ -65,27 +65,6 @@ struct CompactWaveform: View {
     }
 }
 
-/// Playback progress as a thin line under the notch, for when the menu bar
-/// leaves no room for the wings. Ticks locally, like `NotchProgress`.
-struct ProgressLine: View {
-    @ObservedObject var model: PlayerModel
-
-    var body: some View {
-        TimelineView(.periodic(from: Date(), by: 0.5)) { context in
-            GeometryReader { geometry in
-                // A live stream has no progress to show; the line is just lit.
-                let fraction = CGFloat(model.reading?.progress(at: context.date) ?? 1)
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Color.white.opacity(0.2))
-                    Capsule().fill(Color(nsColor: model.activeTint))
-                        .frame(width: geometry.size.width * min(max(fraction, 0), 1))
-                }
-            }
-        }
-        .accessibilityHidden(true)
-    }
-}
-
 /// The new track, under the closed notch.
 struct PeekLine: View {
     @ObservedObject var model: PlayerModel
