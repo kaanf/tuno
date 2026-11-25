@@ -60,6 +60,7 @@ final class PlayerController {
         var configuration = NotchConfiguration()
         configuration.wingWidth = 50
         configuration.peekHeight = PlayerPanelMetrics.peekLine
+        configuration.measuredSides = .both
         let model = model
         notch = Notch(configuration: configuration) {
             CompactArtwork(model: model)
@@ -83,6 +84,13 @@ final class PlayerController {
         model.onCycleRepeat = { [weak self] in self?.cycleRepeat() }
         model.onToggleFavorite = { [weak self] in self?.toggleFavorite() }
         notch.onExpand = { [weak self] in self?.refreshScriptState() }
+        #if DEBUG
+        notch.onClearanceChange = { clearance in
+            let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?"
+            print("clearance \(app): leading \(clearance.leading.map { "\($0)" } ?? "nil"), trailing \(clearance.trailing.map { "\($0)" } ?? "nil")")
+            fflush(stdout)
+        }
+        #endif
         // In finger direction: a swipe to the left brings the next track in.
         notch.onSwipe = { [weak self] swipe in self?.model.onCommand(swipe == .left ? .next : .previous) }
 
