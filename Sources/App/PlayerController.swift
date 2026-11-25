@@ -67,6 +67,7 @@ final class PlayerController {
         configuration.wingWidth = 50
         configuration.peekHeight = PlayerPanelMetrics.peekLine
         configuration.measuredSides = .both
+        configuration.residency = NotchResidency(id: "tuno", side: .leading)
         let model = model
         notch = Notch(configuration: configuration) {
             CompactArtwork(model: model)
