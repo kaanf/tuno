@@ -11,17 +11,19 @@ import NotchKit
 
 /// Connects the Now Playing stream to the notch: applies the user's filters,
 /// prepares artwork and tint, and handles the global shortcut and Settings.
+@MainActor
 final class PlayerController {
     private let monitor: NowPlayingMonitor?
     private let preferences: Preferences
-    private let notch = NotchController()
+    private let model = PlayerModel()
+    private let notch: Notch
     private lazy var settingsWindow = SettingsWindowController(preferences: preferences)
     private lazy var onboardingWindow: OnboardingWindowController = {
         let controller = OnboardingWindowController()
         controller.onOpenSettings = { [weak self] in self?.showSettings() }
         return controller
     }()
-    private lazy var hotKey = GlobalHotKey { [weak self] in self?.notch.toggleFromKeyboard() ?? () }
+    private lazy var hotKey = GlobalHotKey { [weak self] in self?.notch.toggleExpanded() ?? () }
     private var preferencesObserver: AnyCancellable?
 
     /// The shortcut last handed to `hotKey`; `.none` until the first apply.
@@ -41,6 +43,8 @@ final class PlayerController {
     private var nameCache: [String: String] = [:]
     private var iconCache: [String: NSImage] = [:]
 
+    /// How long a sneak peek stays up.
+    private let peekDuration: TimeInterval = 2.8
     /// Identifies the current track, to notice changes worth a sneak peek.
     private var trackKey: String?
     private let scripting = PlayerScripting.shared
@@ -53,7 +57,22 @@ final class PlayerController {
         self.monitor = monitor
         self.preferences = preferences
 
-        let model = notch.model
+        var configuration = NotchConfiguration()
+        configuration.wingWidth = 50
+        configuration.peekHeight = PlayerPanelMetrics.peekLine
+        let model = model
+        notch = Notch(configuration: configuration) {
+            CompactArtwork(model: model)
+        } compactTrailing: {
+            CompactWaveform(model: model)
+        } expanded: {
+            PlayerPanel(model: model)
+        } peek: {
+            PeekLine(model: model)
+        } menu: {
+            NotchMenu(model: model)
+        }
+
         model.onCommand = { [weak self] key in self?.press(key) }
         model.onOpenApp = { [weak self] in self?.openPlayerApp() }
         model.onSettings = { [weak self] in self?.showSettings() }
@@ -64,6 +83,8 @@ final class PlayerController {
         model.onCycleRepeat = { [weak self] in self?.cycleRepeat() }
         model.onToggleFavorite = { [weak self] in self?.toggleFavorite() }
         notch.onExpand = { [weak self] in self?.refreshScriptState() }
+        // In finger direction: a swipe to the left brings the next track in.
+        notch.onSwipe = { [weak self] swipe in self?.model.onCommand(swipe == .left ? .next : .previous) }
 
         monitor?.onChange = { [weak self] reading in self?.render(reading) }
         applyPreferences()
@@ -87,8 +108,8 @@ final class PlayerController {
         var actions = MockPlayer.Scenario.allCases.map { scenario in
             (title: "Mock: \(scenario.label)", action: { mock.play(scenario) })
         }
-        actions.append((title: "Mock: Peek", action: { [weak self] in self?.notch.peek() }))
-        notch.model.debugActions = actions
+        actions.append((title: "Mock: Peek", action: { [weak self] in self?.notch.peek(for: self?.peekDuration ?? 0) }))
+        model.debugActions = actions
     }
     #endif
 
@@ -121,7 +142,6 @@ final class PlayerController {
             trackKey = nil
             return notch.hide()
         }
-        let model = notch.model
         let artwork = artwork(for: reading)
         model.reading = reading
         model.artwork = artwork
@@ -133,6 +153,9 @@ final class PlayerController {
             model.scriptable = player
             model.scriptState = nil
         }
+        let hasProgress = (reading.duration ?? 0) > 0
+        if model.showsProgress != hasProgress { model.showsProgress = hasProgress }
+        notch.expandedContentSize = PlayerPanelMetrics.size(showsProgress: hasProgress)
         notch.show()
 
         let key = [reading.bundleIdentifier, reading.title, reading.artist].map { $0 ?? "" }.joined(separator: "\u{1F}")
@@ -142,7 +165,7 @@ final class PlayerController {
             trackKey = key
             // Favourite belongs to the track; a pending change was for the old one.
             pendingState = nil
-            if changed, reading.isPlaying { notch.peek() }
+            if changed, reading.isPlaying { notch.peek(for: peekDuration) }
             // Favourite is per track.
             if notch.isExpanded { refreshScriptState() }
         }
@@ -200,21 +223,21 @@ final class PlayerController {
     // MARK: - Scripting
 
     private func refreshScriptState() {
-        guard let player = notch.model.scriptable else { return }
+        guard let player = model.scriptable else { return }
         scripting.state(of: player) { [weak self] state in
-            guard let self, self.notch.model.scriptable == player else { return }
+            guard let self, self.model.scriptable == player else { return }
             if let pending = self.pendingState, Date() < pending.until {
                 // The player hasn't caught up yet; keep showing the change.
                 guard state == pending.state else { return }
             }
             self.pendingState = nil
-            self.notch.model.scriptState = state
+            self.model.scriptState = state
         }
     }
 
     /// Shows a change straight away and holds it while the player applies it.
     private func applyLocally(_ state: ScriptState) {
-        notch.model.scriptState = state
+        model.scriptState = state
         pendingState = (state, Date().addingTimeInterval(3))
     }
 
@@ -230,19 +253,19 @@ final class PlayerController {
     }
 
     private func seek(to seconds: TimeInterval) {
-        guard let player = notch.model.scriptable else { return }
+        guard let player = model.scriptable else { return }
         scripting.seek(player, to: seconds)
         refreshSoon()
     }
 
     private func skip(by seconds: TimeInterval) {
-        guard let player = notch.model.scriptable else { return }
+        guard let player = model.scriptable else { return }
         scripting.skip(player, by: seconds)
         refreshSoon()
     }
 
     private func toggleShuffle() {
-        guard let player = notch.model.scriptable, var state = notch.model.scriptState else { return }
+        guard let player = model.scriptable, var state = model.scriptState else { return }
         state.shuffle.toggle()
         applyLocally(state)
         scripting.setShuffle(player, state.shuffle)
@@ -250,7 +273,7 @@ final class PlayerController {
     }
 
     private func cycleRepeat() {
-        guard let player = notch.model.scriptable, var state = notch.model.scriptState else { return }
+        guard let player = model.scriptable, var state = model.scriptState else { return }
         let cycle = player.repeatCycle
         let index = cycle.firstIndex(of: state.repeatMode) ?? 0
         state.repeatMode = cycle[(index + 1) % cycle.count]
@@ -260,7 +283,7 @@ final class PlayerController {
     }
 
     private func toggleFavorite() {
-        guard let player = notch.model.scriptable, var state = notch.model.scriptState,
+        guard let player = model.scriptable, var state = model.scriptState,
               let favorited = state.favorited else { return }
         state.favorited = !favorited
         applyLocally(state)

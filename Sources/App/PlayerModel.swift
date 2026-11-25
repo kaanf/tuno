@@ -21,6 +21,8 @@ final class PlayerModel: ObservableObject {
     @Published var scriptable: ScriptablePlayer?
     /// Last read shuffle / repeat / favourite state; nil until read.
     @Published var scriptState: ScriptState?
+    /// Whether the open player has a progress row (not for live streams).
+    @Published var showsProgress = true
 
     var onCommand: (MediaKeys.Key) -> Void = { _ in }
     var onSeek: (TimeInterval) -> Void = { _ in }
