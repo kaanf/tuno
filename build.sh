@@ -17,13 +17,8 @@ cd "$(dirname "$0")"
 APP="build/Tuno.app"
 CONTENTS="$APP/Contents"
 IDENTITY="${IDENTITY:-Developer ID Application: Kaan Firat (SGWP227GBQ)}"
-MIN_MACOS="12.0"
+MIN_MACOS="14.0"
 CONFIGURATION="${CONFIGURATION:-release}"
-if [[ "$CONFIGURATION" == "debug" ]]; then
-    SWIFT_FLAGS=(-Onone -D DEBUG)
-else
-    SWIFT_FLAGS=(-O)
-fi
 
 rm -rf build
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
@@ -36,11 +31,10 @@ clang -dynamiclib -fobjc-arc -fvisibility=hidden -O2 -Wall \
     Sources/Bridge/TunoBridge.m
 
 echo "→ Tuno"
-swiftc "${SWIFT_FLAGS[@]}" \
-    -target "$(uname -m)-apple-macos$MIN_MACOS" \
-    -framework AppKit \
-    -o "$CONTENTS/MacOS/Tuno" \
-    Sources/App/*.swift
+# The deployment target comes from Package.swift; keep it equal to MIN_MACOS.
+# SwiftPM defines DEBUG in the debug configuration.
+swift build -c "$CONFIGURATION" --product Tuno
+cp "$(swift build -c "$CONFIGURATION" --show-bin-path)/Tuno" "$CONTENTS/MacOS/Tuno"
 
 cp Resources/Info.plist "$CONTENTS/Info.plist"
 install -m 755 Resources/tuno-bridge.pl "$CONTENTS/Resources/tuno-bridge.pl"

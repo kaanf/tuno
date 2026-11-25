@@ -18,7 +18,7 @@ works with apple music, spotify, and anything playing in your browser (youtube, 
 
 ## installing
 
-grab `Tuno-x.y.z.dmg` from the [releases page](https://github.com/kaanf/tuno/releases), open it and drag tuno into applications. it's signed and notarized, and runs on apple silicon macs with macos 12 or later.
+grab `Tuno-x.y.z.dmg` from the [releases page](https://github.com/kaanf/tuno/releases), open it and drag tuno into applications. it's signed and notarized, and runs on apple silicon macs with macos 14 or later.
 
 ## building
 
@@ -29,7 +29,7 @@ if you'd rather build it yourself:
 open build/Tuno.app
 ```
 
-you need macos 12 or later and the xcode command line tools. the liquid glass icon needs xcode 26, without it you get the regular icon.
+you need macos 14 or later and the xcode command line tools. the liquid glass icon needs xcode 26, without it you get the regular icon.
 
 the build signs with my developer certificate when it's on the machine, and falls back to ad-hoc signing otherwise. to use your own, run `IDENTITY="your cert name" ./build.sh`. with ad-hoc signing macos forgets the accessibility permission every time you rebuild, which gets old fast.
 
