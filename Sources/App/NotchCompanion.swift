@@ -103,6 +103,7 @@ final class NotchController {
     private var pendingExpand: DispatchWorkItem?
     private var pendingCollapse: DispatchWorkItem?
     private var screenObserver: Any?
+    private var spaceObserver: Any?
     private var outsideClickMonitor: Any?
 
     /// Opened from the keyboard: stays open until the pointer has been in
@@ -132,10 +133,19 @@ final class NotchController {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.screensChanged() }
+        // A new full-screen Space doesn't always pick the panel up, so
+        // bring it forward again whenever the Space changes.
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isShown else { return }
+            self.panel?.orderFrontRegardless()
+        }
     }
 
     deinit {
         if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        if let spaceObserver { NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver) }
     }
 
     /// Shows the notch with the model's current contents.
