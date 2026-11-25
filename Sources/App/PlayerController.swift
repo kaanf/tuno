@@ -7,6 +7,7 @@
 
 import AppKit
 import Combine
+import NotchKit
 
 /// Connects the Now Playing stream to the notch: applies the user's filters,
 /// prepares artwork and tint, and handles the global shortcut and Settings.

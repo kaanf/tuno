@@ -5,7 +5,9 @@
 //  Created by Kaan Firat.
 //
 
+import Carbon.HIToolbox
 import Foundation
+import NotchKit
 
 /// User settings, stored in UserDefaults. Observers hear about every change
 /// through `objectWillChange`.
@@ -84,4 +86,9 @@ final class Preferences: ObservableObject {
     private func store(_ value: Any, for key: Key) {
         defaults.set(value, forKey: key.rawValue)
     }
+}
+
+extension Shortcut {
+    /// ⌥⌘P, as in the design.
+    static let openPlayerDefault = Shortcut(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey | optionKey))
 }

@@ -8,6 +8,7 @@
 import AppKit
 import Carbon.HIToolbox
 import Combine
+import NotchKit
 import ServiceManagement
 import SwiftUI
 
